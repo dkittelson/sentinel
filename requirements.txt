@@ -12,6 +12,9 @@ fastapi
 uvicorn
 psycopg2-binary
 sqlalchemy
+supabase
+google-genai
+apscheduler
 tqdm
 matplotlib
 seaborn
