@@ -1,0 +1,17 @@
+# Data (never commit raw data)
+data/raw/
+data/processed/
+*.csv
+
+# Models
+models/*.pkl
+models/*.json
+models/*.ubj
+
+# Environment
+.env
+__pycache__/
+*.pyc
+.DS_Store
+.venv/
+venv/
