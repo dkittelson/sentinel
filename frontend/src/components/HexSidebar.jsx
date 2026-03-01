@@ -5,16 +5,27 @@ import { STRATEGIC_TIER_COLORS, TIER_COLORS } from '../utils/tierColors'
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
 
 export function HexSidebar({ h3Id, onClose }) {
-  const [data, setData]       = useState(null)
-  const [loading, setLoading] = useState(true)
+  const [data, setData]             = useState(null)
+  const [loading, setLoading]       = useState(true)
+  const [narrative, setNarrative]   = useState(null)
+  const [narLoading, setNarLoading] = useState(false)
 
   useEffect(() => {
     if (!h3Id) return
     setLoading(true)
+    setNarrative(null)
+
     fetch(`${API_URL}/hex/${h3Id}`)
       .then(r => r.json())
       .then(d => { setData(d); setLoading(false) })
       .catch(() => setLoading(false))
+
+    // Fetch LLM narrative with real news in parallel
+    setNarLoading(true)
+    fetch(`${API_URL}/hex/${h3Id}/narrative`)
+      .then(r => r.json())
+      .then(d => { setNarrative(d.narrative); setNarLoading(false) })
+      .catch(() => setNarLoading(false))
   }, [h3Id])
 
   if (!h3Id) return null
@@ -52,6 +63,25 @@ export function HexSidebar({ h3Id, onClose }) {
             </div>
           )}
 
+          {/* LLM narrative with real news */}
+          <div style={styles.section}>
+            <div style={styles.label}>
+              Intelligence Summary
+              <span style={{ color: '#555', fontWeight: 400, marginLeft: 6 }}>· live news</span>
+            </div>
+            {narLoading ? (
+              <div style={styles.narrativeSkeleton}>
+                {[100, 88, 95, 72].map((w, i) => (
+                  <div key={i} style={{ ...styles.skeletonLine, width: `${w}%` }} />
+                ))}
+              </div>
+            ) : narrative ? (
+              <p style={styles.narrative}>{narrative}</p>
+            ) : (
+              <p style={styles.muted}>No recent intelligence available for this area.</p>
+            )}
+          </div>
+
           {/* Strategic score bar */}
           <div style={styles.section}>
             <div style={styles.label}>
@@ -68,12 +98,6 @@ export function HexSidebar({ h3Id, onClose }) {
               }} />
             </div>
             <div style={styles.barLabel}>{((data.strategic_score || 0) * 100).toFixed(0)}%</div>
-          </div>
-
-          {/* Key stats */}
-          <div style={styles.section}>
-            <div style={styles.label}>Tactical score</div>
-            <div style={styles.stat}>{((data.tactical_score || 0) * 100).toFixed(0)} / 100</div>
           </div>
 
           {data.gdelt && (
@@ -223,6 +247,23 @@ const styles = {
   },
   muted: {
     color: '#666',
+  },
+  narrative: {
+    margin: 0,
+    color: '#d0d0d0',
+    lineHeight: 1.65,
+    fontSize: 13,
+  },
+  narrativeSkeleton: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 7,
+  },
+  skeletonLine: {
+    height: 11,
+    borderRadius: 4,
+    background: 'linear-gradient(90deg, #1a1a2e, #22223a, #1a1a2e)',
+    backgroundSize: '200% 100%',
   },
   event: {
     display: 'flex',

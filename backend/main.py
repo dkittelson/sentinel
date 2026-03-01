@@ -151,6 +151,34 @@ def get_hex(h3_id: str):
     return result
 
 
+@app.get("/hex/{h3_id}/narrative")
+def get_hex_narrative(h3_id: str):
+    """
+    LLM narrative for a hex: plain-English situation summary from Gemini.
+    """
+    try:
+        import h3 as h3lib
+        sys.path.insert(0, os.path.dirname(__file__))
+        from alerting_agent import explain_hex
+
+        risk = (
+            supabase.table("risk_scores")
+            .select("*")
+            .eq("h3_id", h3_id)
+            .maybe_single()
+            .execute()
+        )
+        if not risk.data:
+            return {"h3_id": h3_id, "narrative": ""}
+
+        lat, lng = h3lib.cell_to_latlng(h3_id)
+        narrative = explain_hex(risk.data, lat, lng)
+        return {"h3_id": h3_id, "narrative": narrative}
+    except Exception as e:
+        print(f"[narrative] Error for {h3_id}: {e}")
+        return {"h3_id": h3_id, "narrative": ""}
+
+
 @app.get("/hexes/region")
 def get_hexes_region(
     lat: float = Query(..., description="Center latitude"),

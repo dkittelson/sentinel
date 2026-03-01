@@ -4,7 +4,7 @@ Alerting Agent — Gemini-powered push notification text generator
 Called by 05_score_live.py ONLY when a hex reaches DANGER tier.
 Returns 2-3 sentences of human-readable alert text explaining the risk.
 
-Uses google-genai SDK with gemini-2.0-flash (free quota, fast).
+Uses google-genai SDK with gemini-2.5-flash.
 """
 
 import os
@@ -71,13 +71,73 @@ caution. Keep it under 60 words. No bullet points."""
     try:
         client = _get_client()
         response = client.models.generate_content(
-            model="gemini-2.0-flash",
+            model="gemini-2.5-flash",
             contents=prompt,
         )
         return response.text.strip()
     except Exception as e:
         print(f"  Gemini alert generation failed: {e}")
         return ""
+
+
+def explain_hex(hex_data: dict, lat: float, lng: float) -> str:
+    """
+    Generate a plain-English narrative for a hex using Gemini.
+    Uses the hex's coordinates and risk signals to produce a human-readable
+    situation summary grounded in Gemini's knowledge of the region.
+
+    Parameters
+    ----------
+    hex_data : dict  Full risk_scores row (strategic_score, strategic_tier,
+                     tactical_triggers, etc.)
+    lat, lng : float  Geographic center of the hex.
+
+    Returns
+    -------
+    str  2-4 sentence narrative or empty string on failure.
+    """
+    triggers   = hex_data.get("tactical_triggers", "") or ""
+    s_score    = hex_data.get("strategic_score", 0.0)
+    s_tier     = (hex_data.get("strategic_tier") or "green").upper()
+    alert_text = hex_data.get("alert_text", "") or ""
+
+    trigger_lines = [t.strip() for t in triggers.split("|") if t.strip()
+                     and "No significant" not in t]
+
+    trigger_block = ""
+    if trigger_lines:
+        trigger_block = "What our sensors detected:\n" + "\n".join(f"- {t}" for t in trigger_lines)
+    else:
+        trigger_block = "No immediate sensor triggers, but the area has elevated historical conflict patterns."
+
+    prompt = f"""You are a conflict intelligence analyst briefing a civilian traveler.
+
+Location: approximately {lat:.3f}°N, {lng:.3f}°E (Middle East / Levant region)
+Risk level: {s_tier} (ML model gives {s_score:.0%} probability of dangerous event in next 72 hours)
+
+{trigger_block}
+
+Write 2-3 sentences in plain, human language that:
+1. Identify the specific place (city, district, or border region) at these coordinates
+2. Explain what the risk signals mean in plain terms — no numbers or acronyms
+3. Summarize recent conflict context you know about this area and what a civilian should be aware of
+
+Be factual, direct, and grounded. Do not use bullet points or headers."""
+
+    try:
+        client = _get_client()
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt,
+        )
+        return response.text.strip()
+    except Exception as e:
+        print(f"  Gemini explain_hex failed: {e}")
+        if alert_text:
+            return alert_text
+        if trigger_lines:
+            return f"Risk signals detected near this location: {'; '.join(trigger_lines[:2])}."
+        return f"This area carries a {s_tier.lower()} risk level based on historical conflict patterns in the region."
 
 
 # ── Quick self-test ───────────────────────────────────────────────────────────

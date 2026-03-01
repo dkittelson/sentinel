@@ -7,7 +7,7 @@ import { useUserLocation } from './hooks/useUserLocation'
 import { useAreaSummary } from './hooks/useAreaSummary'
 import { useBacktest } from './hooks/useBacktest'
 import { hexesToGeoJSON } from './utils/h3ToGeoJSON'
-import { TIER_COLOR_EXPRESSION, TIER_OPACITY_EXPRESSION, STRATEGIC_COLOR_EXPRESSION, STRATEGIC_OPACITY_EXPRESSION } from './utils/tierColors'
+import { STRATEGIC_COLOR_EXPRESSION, STRATEGIC_OPACITY_EXPRESSION } from './utils/tierColors'
 import { HexSidebar } from './components/HexSidebar'
 import { NewsSidebar } from './components/NewsSidebar'
 import { LaunchPage } from './components/LaunchPage'
@@ -87,8 +87,8 @@ export default function App() {
         type: 'fill',
         source: SOURCE_ID,
         paint: {
-          'fill-color':   TIER_COLOR_EXPRESSION,
-          'fill-opacity': TIER_OPACITY_EXPRESSION,
+          'fill-color':   STRATEGIC_COLOR_EXPRESSION,
+          'fill-opacity': STRATEGIC_OPACITY_EXPRESSION,
         },
       })
 
@@ -146,21 +146,9 @@ export default function App() {
     source.setData(hexesToGeoJSON(hexes))
   }, [mapReady, hexes, isLoading])
 
-  // Switch paint expressions based on backtest mode
-  useEffect(() => {
-    if (!mapReady || !map.current.getLayer(LAYER_ID)) return
-    const colorExpr = backtest.active ? STRATEGIC_COLOR_EXPRESSION : TIER_COLOR_EXPRESSION
-    const opacityExpr = backtest.active ? STRATEGIC_OPACITY_EXPRESSION : TIER_OPACITY_EXPRESSION
-    map.current.setPaintProperty(LAYER_ID, 'fill-color', colorExpr)
-    map.current.setPaintProperty(LAYER_ID, 'fill-opacity', opacityExpr)
-  }, [mapReady, backtest.active])
-
-  const dangerCount  = backtest.active
-    ? hexes.filter(h => h.strategic_tier === 'red').length
-    : hexes.filter(h => h.tactical_tier === 'DANGER').length
-  const warningCount = backtest.active
-    ? hexes.filter(h => h.strategic_tier === 'orange').length
-    : hexes.filter(h => h.tactical_tier === 'WARNING').length
+  // Always color by strategic tier (ML model output) in both live and backtest mode
+  const dangerCount  = hexes.filter(h => h.strategic_tier === 'red').length
+  const warningCount = hexes.filter(h => h.strategic_tier === 'orange').length
 
   return (
     <>
