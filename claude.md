@@ -100,8 +100,9 @@ XGBoost handles this with scale_pos_weight=64.51.
 | data/processed/acled_h3.csv | ACLED hex-day panel (8.5M rows, 32 cols, label=1.1%) | done |
 | data/processed/acled_h3_gdelt.csv | ACLED+GDELT merged hex-day table | done |
 | data/processed/acled_h3_gdelt_firms.csv | Final enriched training/inference feature table | done |
-| models/xgb_sentinel.ubj | Production model (focal loss) | done (AUC-PR 0.317, F1 0.360) |
-| models/xgb_standard.ubj | Standard XGBoost backup | done (AUC-PR 0.309, F1 0.358) |
+| models/xgb_sentinel.ubj | Production model (Standard XGBoost @ thresh 0.75) | done (ROC-AUC 0.872, AUC-PR 0.585, F1 0.536) |
+| models/xgb_focal.ubj | Focal loss model (gamma=2, alpha=0.25) | done (ROC-AUC 0.873, AUC-PR 0.594, F1 0.535) |
+| models/xgb_standard.ubj | Standard XGBoost (same as xgb_sentinel.ubj) | done |
 | models/eval_report.txt | CV + test set evaluation report | done |
 | models/feature_importance.png | Feature importance bar chart | done |
 
@@ -140,30 +141,35 @@ XGBoost handles this with scale_pos_weight=64.51.
 - [x] Fine-grained threshold sweep (0.05 steps) on both models -- set tier thresholds Yellow/Orange/Red
 
 ### Phase 2 -- Backend
-- [ ] Set up Supabase project (managed Postgres + PostGIS, free tier)
-- [ ] Design DB schema: hex_grid, risk_scores, acled_events, gdelt_signals, firms_anomalies
-- [ ] Build main.py FastAPI server
-  - [ ] GET /hexes -- returns all hex IDs + current risk score + tier
-  - [ ] GET /hex/{h3_id} -- returns full feature breakdown for one hex
-  - [ ] GET /hexes/region?lat=&lon=&radius_km= -- spatial query around GPS point
-  - [ ] POST /ingest/run -- manually trigger full pipeline refresh
-- [ ] Build cron job scheduler (APScheduler) to pull GDELT + FIRMS every 15 min
-- [ ] Build 05_score_live.py -- loads saved XGBoost model, runs inference on latest hex features, writes scores to DB
-- [ ] Add .env support for all API keys (ACLED, FIRMS MAP_KEY, Supabase URL/key)
+- [x] Set up Supabase project (managed Postgres + PostGIS, free tier)
+- [x] Design DB schema: hex_grid, risk_scores, acled_events, gdelt_signals, firms_anomalies (backend/db/schema.sql)
+- [x] Build main.py FastAPI server
+  - [x] GET /hexes -- returns all hex IDs + current risk score + tier
+  - [x] GET /hex/{h3_id} -- returns full feature breakdown for one hex
+  - [x] GET /hexes/region?lat=&lon=&radius_km= -- PostGIS spatial query around GPS point
+  - [x] GET /area-summary?lat=&lon=&radius_km= -- Gemini LLM briefing for visible map area
+  - [x] POST /ingest/run -- manually trigger full pipeline refresh
+- [x] Build APScheduler cron (inside main.py) to re-score every 15 min
+- [x] Build 05_score_live.py -- loads xgb_sentinel.ubj, runs inference + tactical scoring, upserts to risk_scores
+- [x] Add .env support for all API keys (backend/.env, backend/.env.example)
+- [x] Build backend/db/seed_hex_grid.py -- one-time hex_grid population from acled_h3.csv
 
 ### Phase 3 -- AI Alerting Agent
-- [ ] Choose LLM (OpenAI GPT-4o or Claude claude-sonnet-4-5 via API)
-- [ ] Build alerting_agent.py -- reads top triggering features for a Red hex, constructs prompt, returns alert text
-- [ ] Prompt includes: hex location name, event types, fatality delta, neighbor pressure, GDELT sentiment, FIRMS spike
-- [ ] Integrate with FastAPI: when a hex flips to Red, auto-call agent and store alert text in DB
+- [x] Choose LLM: Gemini 2.0 Flash (google-genai SDK, free quota)
+- [x] Build alerting_agent.py -- generates 2-3 sentence DANGER-tier alert from feature values
+- [x] Build /area-summary endpoint -- Gemini briefing of conflict situation for current map viewport
+- [x] Integrated with FastAPI: DANGER hexes auto-generate alert_text, stored in risk_scores.alert_text
 
 ### Phase 4 -- Frontend
-- [ ] Set up React web app (recommended over React Native for hackathon speed)
-- [ ] Set up Mapbox GL JS with dark mode base map
-- [ ] Render H3 hex grid as GeoJSON polygon layer, colored by risk tier (Yellow / Orange / Red)
-- [ ] Fetch hex data from FastAPI /hexes endpoint on interval
-- [ ] Click on hex -> show feature breakdown sidebar (event count, fatalities, GDELT sentiment, FIRMS spike, AI alert text)
-- [ ] Auto-center map on user GPS location (browser Geolocation API)
+- [x] Set up Vite + React app (frontend/)
+- [x] Set up Mapbox GL JS with dark-v11 base map + h3-js for client-side GeoJSON conversion
+- [x] Render H3 hex grid as fill layer, colored by tactical tier (CLEAR/WATCH/WARNING/DANGER)
+- [x] Poll GET /hexes every 30s, update map layer via source.setData()
+- [x] Click hex → HexSidebar (tactical triggers, ML score bar, GDELT/FIRMS signals, ACLED events, Gemini alert text)
+- [x] Auto-center + flyTo user GPS location on launch (Beirut fallback)
+- [x] Launch splash page: silver/black metallic logo, stats, ENTER button → dramatic zoom-in
+- [x] NewsSidebar (top-right): Gemini area briefing, auto-updates on pan/zoom with 1.8s debounce
+- [x] Top-center status bar: DANGER/WARNING counts + live hex count
 
 ### Phase 5 -- Alerting
 - [ ] Set up Firebase project + FCM
@@ -200,4 +206,4 @@ XGBoost handles this with scale_pos_weight=64.51.
 | GDELT | No key required | free |
 | Supabase | Project URL + anon key | set up with backend |
 | Mapbox | Public token | set up with frontend |
-| OpenAI / Anthropic | API key | set up with alerting agent |
+| Gemini | API key (aistudio.google.com) | done -- in backend/.env |
