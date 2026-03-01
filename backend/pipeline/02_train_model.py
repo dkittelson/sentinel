@@ -35,6 +35,14 @@ FEATURES = [
     "fatalities_roll2w",
     "event_count_roll4w",
     "fatalities_roll4w",
+    # Velocity / momentum
+    "event_count_delta",
+    "fatality_delta",
+    "event_velocity",
+    "fatality_velocity",
+    # Spatial lag
+    "neighbor_event_avg",
+    "neighbor_fatal_sum",
 ]
 LABEL = "label_escalation"
 

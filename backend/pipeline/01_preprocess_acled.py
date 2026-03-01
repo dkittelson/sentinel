@@ -1,6 +1,7 @@
 """
 Step 1: ACLED Data Preprocessing + H3 Binning
 Ingests raw ACLED CSV, cleans it, and aggregates events into H3 hexagonal grid cells.
+Now includes velocity/momentum features and spatial lag features.
 Output: data/processed/acled_h3.csv
 """
 
@@ -90,6 +91,58 @@ for window in [2, 4]:  # 2-week and 4-week rolling averages
         agg.groupby("h3_id")["total_fatalities"]
         .transform(lambda x: x.rolling(window, min_periods=1).mean())
     )
+
+# ── Velocity / Momentum Features ─────────────────────────────────────────────
+# These capture acceleration, not just absolute level — key for distinguishing
+# a chronically active hex from one that is *suddenly* spiking.
+print("Computing velocity features...")
+
+agg["event_count_delta"] = (
+    agg.groupby("h3_id")["event_count"].diff().fillna(0)
+)
+agg["fatality_delta"] = (
+    agg.groupby("h3_id")["total_fatalities"].diff().fillna(0)
+)
+# Velocity ratio: this week vs 4-week baseline (>1.0 means spiking above baseline)
+agg["event_velocity"] = (
+    agg["event_count"] / (agg["event_count_roll4w"] + 1e-6)
+)
+agg["fatality_velocity"] = (
+    agg["total_fatalities"] / (agg["fatalities_roll4w"] + 1e-6)
+)
+
+# ── Spatial Lag Features ──────────────────────────────────────────────────────
+# For each hex-week, compute the average/sum activity in its ring-1 H3 neighbors.
+# Conflict spills over spatially — neighboring hex escalation is a strong predictor.
+print("Computing spatial lag features (this may take ~1 minute)...")
+
+# Build a lookup: h3_id → week → event_count / fatalities
+pivot_events = agg.pivot_table(
+    index="week", columns="h3_id", values="event_count", fill_value=0
+)
+pivot_fatal = agg.pivot_table(
+    index="week", columns="h3_id", values="total_fatalities", fill_value=0
+)
+
+all_hexes = agg["h3_id"].unique()
+
+neighbor_event_avg = []
+neighbor_fatal_sum = []
+
+for _, row in tqdm(agg.iterrows(), total=len(agg), desc="  Spatial lag"):
+    neighbors = list(set(h3.grid_disk(row["h3_id"], k=1)) - {row["h3_id"]})
+    # Only include neighbors that exist in our dataset
+    valid = [n for n in neighbors if n in pivot_events.columns]
+    week  = row["week"]
+    if valid and week in pivot_events.index:
+        neighbor_event_avg.append(pivot_events.loc[week, valid].mean())
+        neighbor_fatal_sum.append(pivot_fatal.loc[week, valid].sum())
+    else:
+        neighbor_event_avg.append(0.0)
+        neighbor_fatal_sum.append(0.0)
+
+agg["neighbor_event_avg"] = neighbor_event_avg
+agg["neighbor_fatal_sum"] = neighbor_fatal_sum
 
 # ── Label: Escalation in Next Week ───────────────────────────────────────────
 # Binary label: did event_count INCREASE next week in this hex?
