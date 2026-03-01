@@ -45,12 +45,14 @@ FIRMS_FEATURES = [
     "neighbor_firms_spike_sum",
 ]
 
-# Strategic tier thresholds (match 05_score_live.py)
+# Strategic tier thresholds — calibrated to real score distribution.
+# Model outputs ~0.50 baseline for quiet hexes; thresholds tuned so
+# only genuinely elevated hexes show color.
 STRATEGIC_TIERS = [
-    (0.70, "red"),
-    (0.45, "orange"),
-    (0.25, "yellow"),
-    (0.0,  "green"),
+    (0.70, "red"),      # top ~2% — active combat
+    (0.63, "orange"),   # ~2-10% — high danger
+    (0.54, "yellow"),   # ~10-30% — elevated signal
+    (0.0,  "green"),    # baseline
 ]
 
 

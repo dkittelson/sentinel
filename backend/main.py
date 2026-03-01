@@ -83,16 +83,58 @@ def get_all_hexes():
     """
     Return all scored hexes with their current risk state.
     Frontend polls this every 30s to update the map layer.
+
+    Falls back to backtest engine (latest available date from CSV) when
+    Supabase has no scored data — enables instant "live" mode without
+    requiring 05_score_live.py to have pushed to Supabase.
     """
-    resp = (
-        supabase.table("risk_scores")
-        .select(
-            "h3_id, strategic_score, strategic_tier, "
-            "tactical_score, tactical_tier, should_alert, scored_at"
-        )
-        .execute()
-    )
-    return resp.data
+    try:
+        # Supabase default limit is 1000 — fetch all scored hexes
+        all_rows = []
+        page_size = 1000
+        offset = 0
+        while True:
+            resp = (
+                supabase.table("risk_scores")
+                .select(
+                    "h3_id, strategic_score, strategic_tier, "
+                    "tactical_score, tactical_tier, should_alert, scored_at"
+                )
+                .range(offset, offset + page_size - 1)
+                .execute()
+            )
+            if resp.data:
+                all_rows.extend(resp.data)
+            if not resp.data or len(resp.data) < page_size:
+                break
+            offset += page_size
+        if all_rows:
+            # Recompute tiers on-the-fly so threshold changes take effect
+            # without re-running the full scoring pipeline
+            for row in all_rows:
+                s = row.get("strategic_score", 0)
+                if s >= 0.70:
+                    row["strategic_tier"] = "red"
+                elif s >= 0.63:
+                    row["strategic_tier"] = "orange"
+                elif s >= 0.54:
+                    row["strategic_tier"] = "yellow"
+                else:
+                    row["strategic_tier"] = "green"
+            return all_rows
+    except Exception as e:
+        print(f"[hexes] Supabase query failed, falling back to CSV: {e}")
+
+    # Fallback: score the latest available date from the processed CSV
+    try:
+        from backtest_score import score_date, get_date_range
+        date_range = get_date_range()
+        latest = date_range["max_date"]
+        print(f"[hexes] Supabase empty — scoring latest CSV date: {latest}")
+        return score_date(latest)
+    except Exception as e:
+        print(f"[hexes] Backtest fallback also failed: {e}")
+        return []
 
 
 @app.get("/hex/{h3_id}")
@@ -360,6 +402,112 @@ def backtest_date_range():
         return get_date_range()
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/hex/{h3_id}/cluster-narrative")
+def get_cluster_narrative(
+    h3_id: str,
+    date: Optional[str] = Query(None, description="Date for backtest mode (YYYY-MM-DD)"),
+):
+    """
+    Generate a Gemini narrative shared across all adjacent hexes with the same
+    strategic tier (cluster).  Returns the narrative + list of cluster hex IDs
+    so the frontend can highlight the whole cluster.
+    """
+    try:
+        sys.path.insert(0, os.path.dirname(__file__))
+        from cluster_narrative import generate_cluster_narrative
+
+        # Build hex_lookup from backtest or live data
+        if date:
+            from backtest_score import score_date
+            records = score_date(date)
+        else:
+            resp = (
+                supabase.table("risk_scores")
+                .select("h3_id, strategic_score, strategic_tier, tactical_score, tactical_tier, tactical_triggers")
+                .execute()
+            )
+            records = resp.data or []
+
+        hex_lookup = {r["h3_id"]: r for r in records}
+
+        result = generate_cluster_narrative(h3_id, hex_lookup, date)
+        return result
+    except Exception as e:
+        print(f"[cluster-narrative] Error: {e}")
+        return {"narrative": "", "cluster_ids": [h3_id], "hex_count": 1, "error": str(e)}
+
+
+@app.get("/evac-route")
+def get_evac_route(
+    from_lat: float = Query(..., description="Starting latitude"),
+    from_lng: float = Query(..., description="Starting longitude"),
+    to_lat: Optional[float] = Query(None, description="Destination latitude (auto if omitted)"),
+    to_lng: Optional[float] = Query(None, description="Destination longitude (auto if omitted)"),
+    date: Optional[str] = Query(None, description="Date for backtest mode (YYYY-MM-DD)"),
+):
+    """
+    AI-powered evacuation route: finds safest path from a point, avoiding
+    danger hexes.  Uses Gemini to generate a human-readable recommendation.
+    Works for both live and backtest mode.
+    """
+    try:
+        sys.path.insert(0, os.path.dirname(__file__))
+        from evac_router import find_evac_route, generate_evac_narrative
+        import json
+
+        # Load shelter data
+        shelter_path = os.path.join(
+            os.path.dirname(__file__), "..", "frontend", "src", "data", "shelters.json"
+        )
+        shelter_data = []
+        if os.path.exists(shelter_path):
+            with open(shelter_path) as f:
+                shelter_data = json.load(f).get("shelters", [])
+
+        # Get current hex scores
+        if date:
+            from backtest_score import score_date
+            hex_scores = score_date(date)
+        else:
+            resp = (
+                supabase.table("risk_scores")
+                .select("h3_id, strategic_score, strategic_tier")
+                .execute()
+            )
+            hex_scores = resp.data or []
+
+        hex_lookup = {r["h3_id"]: r for r in hex_scores}
+
+        # Find route
+        route = find_evac_route(
+            from_lat, from_lng, hex_scores,
+            to_lat=to_lat, to_lng=to_lng,
+            shelter_data=shelter_data,
+        )
+
+        # Generate AI narrative
+        route["narrative"] = generate_evac_narrative(route, hex_lookup)
+
+        return route
+    except Exception as e:
+        print(f"[evac-route] Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/shelters")
+def get_shelters():
+    """Return all known hospitals, UN shelters, and evacuation points."""
+    import json
+    shelter_path = os.path.join(
+        os.path.dirname(__file__), "..", "frontend", "src", "data", "shelters.json"
+    )
+    try:
+        with open(shelter_path) as f:
+            return json.load(f)
+    except Exception:
+        return {"shelters": []}
 
 
 @app.post("/ingest/run")

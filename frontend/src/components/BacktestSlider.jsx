@@ -1,15 +1,31 @@
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 
 /**
  * BacktestSlider — bottom-center time-travel control bar for demo mode.
  *
  * Features:
- *   - Date slider (range input)
+ *   - Date slider (range input) with event annotation markers
  *   - Play / Pause button
  *   - Speed control (1x / 2x / 4x)
  *   - Current date + tier counts display
  *   - Preset jump buttons (Oct 7, Oct 17, Nov 23)
+ *   - Key historical event annotations on the timeline
  */
+
+// Key historical events for annotation markers
+const TIMELINE_EVENTS = [
+  { date: '2023-10-07', label: 'Hamas attack on Israel',      color: '#e74c3c', major: true },
+  { date: '2023-10-17', label: 'Al-Ahli hospital blast',      color: '#e67e22', major: false },
+  { date: '2023-10-27', label: 'IDF ground incursion',         color: '#e74c3c', major: false },
+  { date: '2023-11-24', label: 'Israel-Hamas truce begins',    color: '#2ecc71', major: true },
+  { date: '2024-01-02', label: 'Al-Arouri assassinated',       color: '#e74c3c', major: false },
+  { date: '2024-04-01', label: 'Strike on Iran consulate',     color: '#e67e22', major: false },
+  { date: '2024-04-13', label: 'Iran retaliatory attack',      color: '#e74c3c', major: false },
+  { date: '2024-09-17', label: 'Lebanon pager attacks',        color: '#e74c3c', major: true },
+  { date: '2024-10-01', label: 'Israel invades Lebanon',       color: '#e74c3c', major: true },
+  { date: '2024-11-27', label: 'Israel-Lebanon ceasefire',     color: '#2ecc71', major: true },
+]
+
 export function BacktestSlider({
   currentDate,
   dateRange,
@@ -63,6 +79,19 @@ export function BacktestSlider({
     else onSetSpeed(1000)
   }
 
+  // Compute event marker positions
+  const eventMarkers = useMemo(() => {
+    return TIMELINE_EVENTS.map(evt => {
+      const evtDate = new Date(evt.date)
+      const day = Math.round((evtDate - minDate) / 86400000)
+      const pct = totalDays > 0 ? (day / totalDays) * 100 : 0
+      if (pct < 0 || pct > 100) return null
+      return { ...evt, pct, day }
+    }).filter(Boolean)
+  }, [minDate, totalDays])
+
+  const [hoveredEvent, setHoveredEvent] = useState(null)
+
   return (
     <div style={styles.container}>
       {/* Top row: date + counts */}
@@ -89,15 +118,65 @@ export function BacktestSlider({
         {loading && <span style={styles.spinner}>⟳</span>}
       </div>
 
-      {/* Slider */}
-      <input
-        type="range"
-        min={0}
-        max={totalDays}
-        value={currentDay}
-        onChange={handleSlider}
-        style={styles.slider}
-      />
+      {/* Slider with event annotations */}
+      <div style={styles.sliderContainer}>
+        <input
+          type="range"
+          min={0}
+          max={totalDays}
+          value={currentDay}
+          onChange={handleSlider}
+          style={styles.slider}
+        />
+
+        {/* Event markers */}
+        {eventMarkers.map((evt, i) => (
+          <div
+            key={i}
+            style={{
+              position: 'absolute',
+              left: `${evt.pct}%`,
+              top: evt.major ? -6 : -3,
+              width: evt.major ? 3 : 2,
+              height: evt.major ? 18 : 12,
+              background: evt.color,
+              borderRadius: 1,
+              cursor: 'pointer',
+              opacity: evt.major ? 0.9 : 0.6,
+              zIndex: 2,
+              transition: 'opacity 0.15s',
+            }}
+            onMouseEnter={() => setHoveredEvent(evt)}
+            onMouseLeave={() => setHoveredEvent(null)}
+            onClick={() => jumpTo(evt.date)}
+          />
+        ))}
+
+        {/* Tooltip for hovered event */}
+        {hoveredEvent && (
+          <div style={{
+            position: 'absolute',
+            left: `${hoveredEvent.pct}%`,
+            bottom: 28,
+            transform: 'translateX(-50%)',
+            background: 'rgba(10,10,20,0.95)',
+            border: `1px solid ${hoveredEvent.color}`,
+            borderRadius: 6,
+            padding: '5px 10px',
+            whiteSpace: 'nowrap',
+            fontSize: 11,
+            color: '#eee',
+            zIndex: 30,
+            pointerEvents: 'none',
+          }}>
+            <span style={{ color: hoveredEvent.color, fontWeight: 700 }}>
+              {formatDate(hoveredEvent.date)}
+            </span>
+            {' — '}
+            {hoveredEvent.label}
+          </div>
+        )}
+      </div>
 
       {/* Bottom row: controls */}
       <div style={styles.controls}>
@@ -186,6 +265,13 @@ const styles = {
     animation: 'spin 1s linear infinite',
     fontSize: 16,
     color: '#888',
+  },
+  sliderContainer: {
+    position: 'relative',
+    width: '100%',
+    height: 20,
+    display: 'flex',
+    alignItems: 'center',
   },
   slider: {
     width: '100%',

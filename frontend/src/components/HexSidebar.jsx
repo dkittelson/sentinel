@@ -4,29 +4,42 @@ import { STRATEGIC_TIER_COLORS, TIER_COLORS } from '../utils/tierColors'
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
 
-export function HexSidebar({ h3Id, onClose }) {
+export function HexSidebar({ h3Id, onClose, backtestDate }) {
   const [data, setData]             = useState(null)
   const [loading, setLoading]       = useState(true)
   const [narrative, setNarrative]   = useState(null)
   const [narLoading, setNarLoading] = useState(false)
+  const [clusterIds, setClusterIds] = useState([])
 
   useEffect(() => {
     if (!h3Id) return
     setLoading(true)
     setNarrative(null)
+    setClusterIds([])
 
     fetch(`${API_URL}/hex/${h3Id}`)
       .then(r => r.json())
       .then(d => { setData(d); setLoading(false) })
       .catch(() => setLoading(false))
 
-    // Fetch LLM narrative with real news in parallel
+    // Fetch cluster narrative (groups adjacent same-tier hexes)
+    const dateParam = backtestDate ? `&date=${backtestDate}` : ''
     setNarLoading(true)
-    fetch(`${API_URL}/hex/${h3Id}/narrative`)
+    fetch(`${API_URL}/hex/${h3Id}/cluster-narrative?${dateParam}`)
       .then(r => r.json())
-      .then(d => { setNarrative(d.narrative); setNarLoading(false) })
-      .catch(() => setNarLoading(false))
-  }, [h3Id])
+      .then(d => {
+        setNarrative(d.narrative)
+        setClusterIds(d.cluster_ids || [])
+        setNarLoading(false)
+      })
+      .catch(() => {
+        // Fallback to per-hex narrative
+        fetch(`${API_URL}/hex/${h3Id}/narrative`)
+          .then(r => r.json())
+          .then(d => { setNarrative(d.narrative); setNarLoading(false) })
+          .catch(() => setNarLoading(false))
+      })
+  }, [h3Id, backtestDate])
 
   if (!h3Id) return null
 
@@ -57,8 +70,8 @@ export function HexSidebar({ h3Id, onClose }) {
           {data.tactical_triggers && (
             <div style={styles.section}>
               <div style={styles.label}>Active triggers</div>
-              {data.tactical_triggers.split(' | ').map((t, i) => (
-                <div key={i} style={styles.trigger}>• {t}</div>
+              {data.tactical_triggers.split(' | ').map((trig, i) => (
+                <div key={i} style={styles.trigger}>• {trig}</div>
               ))}
             </div>
           )}
@@ -68,6 +81,11 @@ export function HexSidebar({ h3Id, onClose }) {
             <div style={styles.label}>
               Intelligence Summary
               <span style={{ color: '#3a7bd5', fontWeight: 500, marginLeft: 6, fontSize: 10 }}>⚡ web-grounded</span>
+              {clusterIds.length > 1 && (
+                <span style={{ color: '#888', fontWeight: 400, marginLeft: 6, fontSize: 10 }}>
+                  ({clusterIds.length} hexes in cluster)
+                </span>
+              )}
             </div>
             {narLoading ? (
               <div style={styles.narrativeSkeleton}>

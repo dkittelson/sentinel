@@ -12,12 +12,16 @@ import { HexSidebar } from './components/HexSidebar'
 import { NewsSidebar } from './components/NewsSidebar'
 import { LaunchPage } from './components/LaunchPage'
 import { BacktestSlider } from './components/BacktestSlider'
+import { EvacRoute, useEvacRoute } from './components/EvacRoute'
+import { useShelters, sheltersToGeoJSON, addShelterLayers, ShelterToggleButton } from './components/ShelterLayer'
 
 mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN
 
 const SOURCE_ID  = 'hex-source'
 const LAYER_ID   = 'hex-fill'
 const OUTLINE_ID = 'hex-outline'
+const EVAC_SOURCE = 'evac-route-source'
+const EVAC_LAYER  = 'evac-route-line'
 
 function getMapBounds(map) {
   const bounds = map.getBounds()
@@ -34,6 +38,9 @@ function getMapBounds(map) {
 export default function App() {
   const mapContainer = useRef(null)
   const map          = useRef(null)
+  const shelterLayerIds = useRef(null)
+  const userMarker   = useRef(null)
+  const USER_DEFAULT = useRef([34.7818, 32.0853]) // Tel Aviv [lng, lat]
   const [launched, setLaunched]       = useState(false)
   const [mapReady, setMapReady]       = useState(false)
   const [selectedHex, setSelectedHex] = useState(null)
@@ -43,6 +50,8 @@ export default function App() {
   const { hexes: liveHexes, loading: hexLoading }     = useHexData()
   const { summary, loading: summaryLoading } = useAreaSummary(mapBounds)
   const backtest = useBacktest()
+  const evac = useEvacRoute()
+  const shelters = useShelters()
 
   // Use backtest hexes when active, otherwise live
   const hexes = backtest.active ? backtest.hexes : liveHexes
@@ -57,24 +66,24 @@ export default function App() {
   useEffect(() => {
     if (!launched || map.current) return
 
-    const BEIRUT = [35.5, 33.9]
+    const USER_POS = USER_DEFAULT.current
 
     map.current = new mapboxgl.Map({
       container: mapContainer.current,
       style: 'mapbox://styles/mapbox/dark-v11',
-      center: BEIRUT,
+      center: USER_POS,
       zoom: 3,
     })
 
     map.current.addControl(new mapboxgl.NavigationControl(), 'top-left')
 
     map.current.on('load', () => {
-      // Dramatic zoom-in — will update to user GPS once it resolves
+      // Dramatic zoom-in to user location on ENTER
       map.current.flyTo({
-        center: BEIRUT,
-        zoom: 7.5,
+        center: USER_POS,
+        zoom: 9,
         duration: 2800,
-        easing: t => t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t,
+        easing: x => x < 0.5 ? 2 * x * x : -1 + (4 - 2 * x) * x,
       })
 
       map.current.addSource(SOURCE_ID, {
@@ -103,11 +112,44 @@ export default function App() {
         },
       })
 
+      // Evacuation route layer
+      map.current.addSource(EVAC_SOURCE, {
+        type: 'geojson',
+        data: { type: 'FeatureCollection', features: [] },
+      })
+      map.current.addLayer({
+        id: EVAC_LAYER,
+        type: 'line',
+        source: EVAC_SOURCE,
+        paint: {
+          'line-color': '#2ecc71',
+          'line-width': 4,
+          'line-opacity': 0.85,
+          'line-dasharray': [2, 1],
+        },
+        layout: { visibility: 'none' },
+      })
+
+      // Shelter layers (initially hidden)
+      shelterLayerIds.current = addShelterLayers(map.current)
+
+      // User location blue dot
+      const el = document.createElement('div')
+      el.style.cssText = 'width:18px;height:18px;border-radius:50%;background:#4A90D9;border:3px solid #fff;box-shadow:0 0 12px rgba(74,144,217,0.6);cursor:grab;'
+      userMarker.current = new mapboxgl.Marker({ element: el, draggable: true })
+        .setLngLat(USER_DEFAULT.current)
+        .addTo(map.current)
+      userMarker.current.on('dragend', () => {
+        const lngLat = userMarker.current.getLngLat()
+        USER_DEFAULT.current = [lngLat.lng, lngLat.lat]
+      })
+
       map.current.on('click', LAYER_ID, e => {
         const props = e.features?.[0]?.properties
         if (props?.h3_id) setSelectedHex(props.h3_id)
       })
 
+      // Map click: if evac mode, fetch route from clicked point
       map.current.on('click', e => {
         const features = map.current.queryRenderedFeatures(e.point, { layers: [LAYER_ID] })
         if (!features.length) setSelectedHex(null)
@@ -128,16 +170,6 @@ export default function App() {
     })
   }, [launched])
 
-  // Fly to real GPS once it resolves (after map is ready)
-  useEffect(() => {
-    if (!mapReady || !location) return
-    map.current.flyTo({
-      center: [location.lng, location.lat],
-      zoom: 7.5,
-      duration: 1800,
-    })
-  }, [mapReady, location])
-
   // Update hex layer on data refresh
   useEffect(() => {
     if (!mapReady || isLoading || !hexes.length) return
@@ -145,6 +177,48 @@ export default function App() {
     if (!source) return
     source.setData(hexesToGeoJSON(hexes))
   }, [mapReady, hexes, isLoading])
+
+  // Draw evac route line when route data changes
+  useEffect(() => {
+    if (!mapReady) return
+    const source = map.current.getSource(EVAC_SOURCE)
+    if (!source) return
+
+    if (evac.routeData?.route_points?.length > 1) {
+      source.setData({
+        type: 'FeatureCollection',
+        features: [{
+          type: 'Feature',
+          properties: {},
+          geometry: {
+            type: 'LineString',
+            coordinates: evac.routeData.route_points,
+          },
+        }],
+      })
+      map.current.setLayoutProperty(EVAC_LAYER, 'visibility', 'visible')
+    } else {
+      source.setData({ type: 'FeatureCollection', features: [] })
+      map.current.setLayoutProperty(EVAC_LAYER, 'visibility', 'none')
+    }
+  }, [mapReady, evac.routeData])
+
+  // Toggle shelter layer visibility
+  useEffect(() => {
+    if (!mapReady || !shelterLayerIds.current) return
+    const vis = shelters.visible ? 'visible' : 'none'
+    const { CIRCLE_LAYER, LABEL_LAYER, SOURCE_ID: sSourceId } = shelterLayerIds.current
+    map.current.setLayoutProperty(CIRCLE_LAYER, 'visibility', vis)
+    map.current.setLayoutProperty(LABEL_LAYER, 'visibility', vis)
+
+    // Update data if becoming visible and shelters are loaded
+    if (shelters.visible && shelters.shelters.length > 0) {
+      const source = map.current.getSource(sSourceId)
+      if (source) source.setData(sheltersToGeoJSON(shelters.shelters))
+    }
+  }, [mapReady, shelters.visible, shelters.shelters])
+
+  // Handle map click for evac mode — removed (now uses blue dot position directly)
 
   // Always color by strategic tier (ML model output) in both live and backtest mode
   const dangerCount  = hexes.filter(h => h.strategic_tier === 'red').length
@@ -159,6 +233,7 @@ export default function App() {
 
         {launched && (
           <>
+            {/* Status bar */}
             <div style={styles.statusBar}>
               <span style={styles.brand}>SENTINEL</span>
               {isLoading ? (
@@ -195,15 +270,53 @@ export default function App() {
               )}
             </div>
 
+            {/* Toolbar: bottom-left buttons */}
+            <div style={styles.toolbar}>
+              <ShelterToggleButton visible={shelters.visible} onToggle={shelters.toggle} />
+              <button
+                onClick={() => {
+                  if (evac.active) {
+                    evac.deactivate()
+                  } else {
+                    evac.activate()
+                    // Route from user's blue dot position
+                    const pos = USER_DEFAULT.current // [lng, lat]
+                    const backtestDate = backtest.active ? backtest.currentDate : null
+                    evac.fetchRoute(pos[1], pos[0], backtestDate)
+                  }
+                }}
+                style={{
+                  ...styles.evacBtn,
+                  borderColor: evac.active ? '#2ecc71' : '#444',
+                  color: evac.active ? '#2ecc71' : '#aaa',
+                  background: evac.active ? 'rgba(46,204,113,0.1)' : 'transparent',
+                }}
+              >
+                {evac.loading ? '⏳ ROUTING...' : evac.active ? '✕ CLOSE' : '🚨 EVACUATE'}
+              </button>
+            </div>
+
+            {/* News sidebar (live mode only) */}
             {!backtest.active && (
-              <NewsSidebar summary={summary} loading={summaryLoading} hidden={!!selectedHex} />
+              <NewsSidebar summary={summary} loading={summaryLoading} hidden={!!selectedHex || evac.active} />
             )}
 
+            {/* Hex detail sidebar */}
             <HexSidebar
               h3Id={selectedHex}
               onClose={() => setSelectedHex(null)}
+              backtestDate={backtest.active ? backtest.currentDate : null}
             />
 
+            {/* Evac route panel */}
+            <EvacRoute
+              active={evac.active}
+              routeData={evac.routeData}
+              loading={evac.loading}
+              onClose={evac.deactivate}
+            />
+
+            {/* Backtest slider */}
             {backtest.active && (
               <BacktestSlider
                 currentDate={backtest.currentDate}
@@ -273,5 +386,26 @@ const styles = {
     padding: '3px 10px',
     cursor: 'pointer',
     letterSpacing: '0.05em',
+  },
+  toolbar: {
+    position: 'absolute',
+    bottom: 24,
+    left: 16,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 8,
+    zIndex: 15,
+  },
+  evacBtn: {
+    background: 'transparent',
+    border: '1px solid #444',
+    borderRadius: 4,
+    padding: '3px 10px',
+    fontSize: 11,
+    fontWeight: 700,
+    cursor: 'pointer',
+    letterSpacing: '0.04em',
+    fontFamily: 'system-ui, sans-serif',
+    transition: 'all 0.15s',
   },
 }

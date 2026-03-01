@@ -38,21 +38,48 @@ export const STRATEGIC_TIER_COLORS = {
   green:  '#2ecc71',
 }
 
-// Strategic tier expressions (for backtest mode — uses ML scores)
+// ── Continuous gradient color expression ──────────────────────────────
+// Interpolate strategic_score into a smooth danger gradient.
+// Below 0.54 = clear (transparent). Above 0.54 ramps through:
+//   0.54  light yellow
+//   0.58  yellow
+//   0.62  light orange
+//   0.66  orange
+//   0.70  red-orange
+//   0.74  red
+//   0.78+ dark red
 export const STRATEGIC_COLOR_EXPRESSION = [
-  'match',
-  ['get', 'strategic_tier'],
-  'red',    STRATEGIC_TIER_COLORS.red,
-  'orange', STRATEGIC_TIER_COLORS.orange,
-  'yellow', STRATEGIC_TIER_COLORS.yellow,
-  '#1a1a2e',  // green/default
+  'case',
+  ['<', ['get', 'strategic_score'], 0.54],
+  '#1a1a2e',  // clear — invisible on dark map
+  [
+    'interpolate',
+    ['linear'],
+    ['get', 'strategic_score'],
+    0.54, '#f7f7a0',   // light yellow
+    0.57, '#f6d860',   // yellow
+    0.60, '#f0b840',   // gold
+    0.63, '#f09438',   // orange
+    0.66, '#e87830',   // deep orange
+    0.69, '#e05a2c',   // red-orange
+    0.72, '#d43d2a',   // red
+    0.76, '#a81c20',   // dark red
+    0.80, '#7a0c14',   // very dark red
+  ],
 ]
 
 export const STRATEGIC_OPACITY_EXPRESSION = [
-  'match',
-  ['get', 'strategic_tier'],
-  'red',    0.85,
-  'orange', 0.70,
-  'yellow', 0.55,
-  0.15,
+  'case',
+  ['<', ['get', 'strategic_score'], 0.54],
+  0.0,   // fully transparent when clear
+  [
+    'interpolate',
+    ['linear'],
+    ['get', 'strategic_score'],
+    0.54, 0.40,
+    0.60, 0.55,
+    0.66, 0.65,
+    0.72, 0.80,
+    0.80, 0.90,
+  ],
 ]

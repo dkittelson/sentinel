@@ -126,12 +126,15 @@ WEATHER_FEATURES = [
     "precip_spike",
 ]
 
-# Strategic tier thresholds (Standard XGBoost, production @ 0.75)
+# Strategic tier thresholds — calibrated to real score distribution.
+# Model outputs ~0.50 baseline (sigmoid of 0) for quiet hexes; active
+# conflict zones push 0.55-0.73. Thresholds tuned so only genuinely
+# elevated hexes show color.
 STRATEGIC_TIERS = [
-    (0.70, "red"),
-    (0.45, "orange"),
-    (0.25, "yellow"),
-    (0.0,  "green"),
+    (0.70, "red"),      # top ~2% — active combat (Gaza, etc.)
+    (0.63, "orange"),   # ~2-10% — high danger concentration
+    (0.54, "yellow"),   # ~10-30% — elevated signal / recent events
+    (0.0,  "green"),    # baseline — no meaningful signal
 ]
 
 
