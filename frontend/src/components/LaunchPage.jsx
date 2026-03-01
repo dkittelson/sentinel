@@ -341,7 +341,7 @@ export function LaunchPage({ onEnter }) {
           transform: canEnter || exiting ? 'translateY(0)' : 'translateY(10px)',
         }}>
           <p style={styles.tagline}>
-            Conflict threat visibility · civilians in active zones
+            Conflict threat visibility for civilians in active combat zones
           </p>
 
           <div style={styles.divider}>
