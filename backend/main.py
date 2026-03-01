@@ -304,6 +304,36 @@ End with one practical sentence of general guidance."""
     }
 
 
+@app.get("/hexes/backtest")
+def backtest_hexes(
+    date: str = Query(..., description="Date to score (YYYY-MM-DD)"),
+):
+    """
+    Score all hexes for a historical date using the production model.
+    Powers the demo time-slider — no Supabase writes.
+    """
+    try:
+        sys.path.insert(0, os.path.dirname(__file__))
+        from backtest_score import score_date
+        records = score_date(date)
+        return records
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/backtest/date-range")
+def backtest_date_range():
+    """Return the min/max dates available for backtesting."""
+    try:
+        sys.path.insert(0, os.path.dirname(__file__))
+        from backtest_score import get_date_range
+        return get_date_range()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/ingest/run")
 def trigger_ingest():
     """Manually trigger a scoring run (useful for demos / testing)."""

@@ -5,11 +5,13 @@ import 'mapbox-gl/dist/mapbox-gl.css'
 import { useHexData } from './hooks/useHexData'
 import { useUserLocation } from './hooks/useUserLocation'
 import { useAreaSummary } from './hooks/useAreaSummary'
+import { useBacktest } from './hooks/useBacktest'
 import { hexesToGeoJSON } from './utils/h3ToGeoJSON'
-import { TIER_COLOR_EXPRESSION, TIER_OPACITY_EXPRESSION } from './utils/tierColors'
+import { TIER_COLOR_EXPRESSION, TIER_OPACITY_EXPRESSION, STRATEGIC_COLOR_EXPRESSION, STRATEGIC_OPACITY_EXPRESSION } from './utils/tierColors'
 import { HexSidebar } from './components/HexSidebar'
 import { NewsSidebar } from './components/NewsSidebar'
 import { LaunchPage } from './components/LaunchPage'
+import { BacktestSlider } from './components/BacktestSlider'
 
 mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN
 
@@ -38,8 +40,13 @@ export default function App() {
   const [mapBounds, setMapBounds]     = useState(null)
 
   const { location } = useUserLocation()
-  const { hexes, loading: hexLoading }     = useHexData()
+  const { hexes: liveHexes, loading: hexLoading }     = useHexData()
   const { summary, loading: summaryLoading } = useAreaSummary(mapBounds)
+  const backtest = useBacktest()
+
+  // Use backtest hexes when active, otherwise live
+  const hexes = backtest.active ? backtest.hexes : liveHexes
+  const isLoading = backtest.active ? backtest.loading : hexLoading
 
   const updateBounds = useCallback(() => {
     if (!map.current) return
@@ -133,14 +140,27 @@ export default function App() {
 
   // Update hex layer on data refresh
   useEffect(() => {
-    if (!mapReady || hexLoading || !hexes.length) return
+    if (!mapReady || isLoading || !hexes.length) return
     const source = map.current.getSource(SOURCE_ID)
     if (!source) return
     source.setData(hexesToGeoJSON(hexes))
-  }, [mapReady, hexes, hexLoading])
+  }, [mapReady, hexes, isLoading])
 
-  const dangerCount  = hexes.filter(h => h.tactical_tier === 'DANGER').length
-  const warningCount = hexes.filter(h => h.tactical_tier === 'WARNING').length
+  // Switch paint expressions based on backtest mode
+  useEffect(() => {
+    if (!mapReady || !map.current.getLayer(LAYER_ID)) return
+    const colorExpr = backtest.active ? STRATEGIC_COLOR_EXPRESSION : TIER_COLOR_EXPRESSION
+    const opacityExpr = backtest.active ? STRATEGIC_OPACITY_EXPRESSION : TIER_OPACITY_EXPRESSION
+    map.current.setPaintProperty(LAYER_ID, 'fill-color', colorExpr)
+    map.current.setPaintProperty(LAYER_ID, 'fill-opacity', opacityExpr)
+  }, [mapReady, backtest.active])
+
+  const dangerCount  = backtest.active
+    ? hexes.filter(h => h.strategic_tier === 'red').length
+    : hexes.filter(h => h.tactical_tier === 'DANGER').length
+  const warningCount = backtest.active
+    ? hexes.filter(h => h.strategic_tier === 'orange').length
+    : hexes.filter(h => h.tactical_tier === 'WARNING').length
 
   return (
     <>
@@ -153,10 +173,15 @@ export default function App() {
           <>
             <div style={styles.statusBar}>
               <span style={styles.brand}>SENTINEL</span>
-              {hexLoading ? (
+              {isLoading ? (
                 <span style={styles.muted}>Connecting…</span>
               ) : (
                 <>
+                  {backtest.active && (
+                    <span style={{ ...styles.badge, background: '#8e44ad' }}>
+                      BACKTEST
+                    </span>
+                  )}
                   {dangerCount > 0 && (
                     <span style={{ ...styles.badge, background: '#e74c3c' }}>
                       {dangerCount} DANGER
@@ -167,17 +192,45 @@ export default function App() {
                       {warningCount} WARNING
                     </span>
                   )}
-                  <span style={styles.muted}>{hexes.length} hexes · live</span>
+                  <span style={styles.muted}>
+                    {hexes.length} hexes · {backtest.active ? backtest.currentDate : 'live'}
+                  </span>
+                  {!backtest.active && (
+                    <button
+                      onClick={() => backtest.enter()}
+                      style={styles.backtestBtn}
+                    >
+                      ⏪ BACKTEST
+                    </button>
+                  )}
                 </>
               )}
             </div>
 
-            <NewsSidebar summary={summary} loading={summaryLoading} hidden={!!selectedHex} />
+            {!backtest.active && (
+              <NewsSidebar summary={summary} loading={summaryLoading} hidden={!!selectedHex} />
+            )}
 
             <HexSidebar
               h3Id={selectedHex}
               onClose={() => setSelectedHex(null)}
             />
+
+            {backtest.active && (
+              <BacktestSlider
+                currentDate={backtest.currentDate}
+                dateRange={backtest.dateRange}
+                playing={backtest.playing}
+                loading={backtest.loading}
+                hexes={hexes}
+                speed={backtest.speed}
+                onPlay={backtest.play}
+                onPause={backtest.pause}
+                onGoToDate={backtest.goToDate}
+                onSetSpeed={backtest.setSpeed}
+                onExit={backtest.exit}
+              />
+            )}
           </>
         )}
       </div>
@@ -220,5 +273,17 @@ const styles = {
   },
   muted: {
     color: '#666',
+  },
+  backtestBtn: {
+    marginLeft: 8,
+    background: 'transparent',
+    border: '1px solid #8e44ad',
+    borderRadius: 4,
+    color: '#8e44ad',
+    fontSize: 11,
+    fontWeight: 700,
+    padding: '3px 10px',
+    cursor: 'pointer',
+    letterSpacing: '0.05em',
   },
 }

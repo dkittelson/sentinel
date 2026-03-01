@@ -37,3 +37,22 @@ export const STRATEGIC_TIER_COLORS = {
   yellow: '#f6d860',
   green:  '#2ecc71',
 }
+
+// Strategic tier expressions (for backtest mode — uses ML scores)
+export const STRATEGIC_COLOR_EXPRESSION = [
+  'match',
+  ['get', 'strategic_tier'],
+  'red',    STRATEGIC_TIER_COLORS.red,
+  'orange', STRATEGIC_TIER_COLORS.orange,
+  'yellow', STRATEGIC_TIER_COLORS.yellow,
+  '#1a1a2e',  // green/default
+]
+
+export const STRATEGIC_OPACITY_EXPRESSION = [
+  'match',
+  ['get', 'strategic_tier'],
+  'red',    0.85,
+  'orange', 0.70,
+  'yellow', 0.55,
+  0.15,
+]
