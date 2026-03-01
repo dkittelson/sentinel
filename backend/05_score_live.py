@@ -159,6 +159,13 @@ def load_model(path: str):
 
 def predict_proba(model, is_booster: bool, X: pd.DataFrame) -> np.ndarray:
     if is_booster:
+        # Align columns to exactly what the model was trained on, filling gaps with 0
+        model_features = model.feature_names
+        if model_features:
+            for col in model_features:
+                if col not in X.columns:
+                    X[col] = 0
+            X = X[model_features]
         raw = model.predict(xgb.DMatrix(X))
         return expit(raw)   # focal booster outputs raw logits
     return model.predict_proba(X)[:, 1]
@@ -170,7 +177,9 @@ def run_scoring():
 
     print(f"Loading features from {FEATURE_PATH}...")
     df = pd.read_csv(FEATURE_PATH)
-    date_col = "date" if "date" in df.columns else "week"
+    date_col = next((c for c in ["date", "event_date", "week"] if c in df.columns), None)
+    if date_col is None:
+        sys.exit("No date column found in feature file (expected: date, event_date, or week)")
     df[date_col] = pd.to_datetime(df[date_col])
     df = df.sort_values(["h3_id", date_col])
 

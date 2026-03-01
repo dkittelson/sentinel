@@ -37,7 +37,7 @@ export default function App() {
   const [selectedHex, setSelectedHex] = useState(null)
   const [mapBounds, setMapBounds]     = useState(null)
 
-  const { location, ready: locationReady } = useUserLocation()
+  const { location } = useUserLocation()
   const { hexes, loading: hexLoading }     = useHexData()
   const { summary, loading: summaryLoading } = useAreaSummary(mapBounds)
 
@@ -46,23 +46,25 @@ export default function App() {
     setMapBounds(getMapBounds(map.current))
   }, [])
 
-  // Init map after launch page dismisses
+  // Init map immediately when user clicks ENTER (no waiting for GPS)
   useEffect(() => {
-    if (!launched || !locationReady || map.current) return
+    if (!launched || map.current) return
+
+    const BEIRUT = [35.5, 33.9]
 
     map.current = new mapboxgl.Map({
       container: mapContainer.current,
       style: 'mapbox://styles/mapbox/dark-v11',
-      center: [location.lng, location.lat],
+      center: BEIRUT,
       zoom: 3,
     })
 
     map.current.addControl(new mapboxgl.NavigationControl(), 'top-left')
 
     map.current.on('load', () => {
-      // Dramatic zoom-in to user location
+      // Dramatic zoom-in — will update to user GPS once it resolves
       map.current.flyTo({
-        center: [location.lng, location.lat],
+        center: BEIRUT,
         zoom: 7.5,
         duration: 2800,
         easing: t => t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t,
@@ -117,7 +119,17 @@ export default function App() {
       setMapReady(true)
       updateBounds()
     })
-  }, [launched, locationReady])
+  }, [launched])
+
+  // Fly to real GPS once it resolves (after map is ready)
+  useEffect(() => {
+    if (!mapReady || !location) return
+    map.current.flyTo({
+      center: [location.lng, location.lat],
+      zoom: 7.5,
+      duration: 1800,
+    })
+  }, [mapReady, location])
 
   // Update hex layer on data refresh
   useEffect(() => {
