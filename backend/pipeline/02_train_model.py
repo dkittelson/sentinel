@@ -63,6 +63,7 @@ GDELT_FEATURES = [
     "gdelt_avg_goldstein",
     "gdelt_num_articles",
     "gdelt_hostility",
+    "neighbor_gdelt_hostility_avg",  # spatial lag: ring-1 news hostility bleed
 ]
 
 # FIRMS features (available after 04_ingest_firms.py)
@@ -71,6 +72,7 @@ FIRMS_FEATURES = [
     "firms_avg_frp",
     "firms_max_frp",
     "firms_spike",
+    "neighbor_firms_spike_sum",  # spatial lag: how many ring-1 neighbors also have thermal spikes
 ]
 LABEL = "label_escalation"
 

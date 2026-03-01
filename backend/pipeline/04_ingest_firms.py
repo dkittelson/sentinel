@@ -35,8 +35,9 @@ H3_RESOLUTION = 6
 # Levant bounding box: W,S,E,N
 BBOX = "33.5,29.5,42.5,37.5"
 
-# FIRMS VIIRS S-NPP 375m — best resolution for detecting explosions, fires
-FIRMS_SOURCE = "VIIRS_SNPP_NRT"
+# FIRMS VIIRS S-NPP 375m — SP = Standard Processing (full archive back to 2012)
+# NRT = Near Real Time (only last ~2 months). Use SP for historical training data.
+FIRMS_SOURCE = "VIIRS_SNPP_SP"
 
 # FIRMS API base URL
 FIRMS_BASE = "https://firms.modaps.eosdis.nasa.gov/api/area/csv"
@@ -57,9 +58,9 @@ all_mondays = pd.date_range(start=date_min, end=date_max, freq="W-MON")
 print(f"Fetching FIRMS for {len(all_mondays)} weeks...")
 
 def fetch_firms_week(monday: pd.Timestamp) -> pd.DataFrame:
-    """Fetch VIIRS thermal hotspots for the Levant for a 7-day window starting on monday."""
+    """Fetch VIIRS thermal hotspots for the Levant for a 5-day window starting on monday."""
     date_str = monday.strftime("%Y-%m-%d")
-    url = f"{FIRMS_BASE}/{MAP_KEY}/{FIRMS_SOURCE}/{BBOX}/7/{date_str}"
+    url = f"{FIRMS_BASE}/{MAP_KEY}/{FIRMS_SOURCE}/{BBOX}/5/{date_str}"  # max 5 days for SP
     try:
         resp = requests.get(url, timeout=30)
         if resp.status_code != 200:
@@ -126,15 +127,35 @@ print(f"  FIRMS hex-weeks with detections: {len(firms_agg):,}")
 print("Merging FIRMS into feature table...")
 
 merged = df.merge(firms_agg, on=["h3_id", "week"], how="left")
-merged["firms_hotspot_count"].fillna(0, inplace=True)
-merged["firms_avg_frp"].fillna(0,       inplace=True)
-merged["firms_max_frp"].fillna(0,       inplace=True)
-merged["firms_spike"].fillna(0,         inplace=True)
+fill_cols = ["firms_hotspot_count", "firms_avg_frp", "firms_max_frp", "firms_spike"]
+merged[fill_cols] = merged[fill_cols].fillna(0)
 
 coverage = (merged["firms_hotspot_count"] > 0).mean()
 print(f"  FIRMS coverage: {coverage:.1%} of hex-weeks have at least 1 thermal detection")
 
+# ── Spatial Lag: FIRMS Spike ──────────────────────────────────────────────────
+# For each hex-week, sum the firms_spike flags across ring-1 neighbors.
+# If 3 neighboring hexes all have thermal spikes, that's a broad burn/engagement
+# front — much more alarming than an isolated single-hex detection.
+print("Computing FIRMS spatial lag (neighbor_firms_spike_sum)...")
+
+pivot_spike = merged.pivot_table(
+    index="week", columns="h3_id", values="firms_spike", fill_value=0
+)
+
+neighbor_firms_spike_sum = []
+for _, row in tqdm(merged.iterrows(), total=len(merged), desc="  FIRMS spatial lag"):
+    neighbors = list(set(h3.grid_disk(row["h3_id"], k=1)) - {row["h3_id"]})
+    valid = [n for n in neighbors if n in pivot_spike.columns]
+    week  = row["week"]
+    if valid and week in pivot_spike.index:
+        neighbor_firms_spike_sum.append(int(pivot_spike.loc[week, valid].sum()))
+    else:
+        neighbor_firms_spike_sum.append(0)
+
+merged["neighbor_firms_spike_sum"] = neighbor_firms_spike_sum
+
 # ── Save ──────────────────────────────────────────────────────────────────────
 merged.to_csv(OUT_PATH, index=False)
 print(f"\nSaved {len(merged):,} rows to {OUT_PATH}")
-print("New columns: firms_hotspot_count, firms_avg_frp, firms_max_frp, firms_spike")
+print("New columns: firms_hotspot_count, firms_avg_frp, firms_max_frp, firms_spike, neighbor_firms_spike_sum")

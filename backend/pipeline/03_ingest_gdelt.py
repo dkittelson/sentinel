@@ -148,17 +148,36 @@ print("Merging GDELT features into ACLED H3 table...")
 merged = acled.merge(gdelt_agg, on=["h3_id", "week"], how="left")
 
 # Fill nulls (hexes with no GDELT coverage that week) with neutral values
-merged["gdelt_event_count"].fillna(0, inplace=True)
-merged["gdelt_avg_tone"].fillna(0, inplace=True)
-merged["gdelt_min_goldstein"].fillna(0, inplace=True)
-merged["gdelt_avg_goldstein"].fillna(0, inplace=True)
-merged["gdelt_num_articles"].fillna(0, inplace=True)
-merged["gdelt_hostility"].fillna(0, inplace=True)
+fill_cols = ["gdelt_event_count", "gdelt_avg_tone", "gdelt_min_goldstein",
+             "gdelt_avg_goldstein", "gdelt_num_articles", "gdelt_hostility"]
+merged[fill_cols] = merged[fill_cols].fillna(0)
 
 coverage = (merged["gdelt_event_count"] > 0).mean()
 print(f"  GDELT coverage: {coverage:.1%} of hex-weeks have at least 1 GDELT event")
 
+# ── Spatial Lag: GDELT Hostility ──────────────────────────────────────────────
+# For each hex-week, compute the average GDELT hostility of its ring-1 neighbors.
+# This lets a news-hostile hex "bleed" signal to bordering hexes, producing the
+# probability gradient ring on the map rather than isolated point spikes.
+print("Computing GDELT spatial lag (neighbor_gdelt_hostility_avg)...")
+
+pivot_hostility = merged.pivot_table(
+    index="week", columns="h3_id", values="gdelt_hostility", fill_value=0.0
+)
+
+neighbor_gdelt_hostility_avg = []
+for _, row in tqdm(merged.iterrows(), total=len(merged), desc="  GDELT spatial lag"):
+    neighbors = list(set(h3.grid_disk(row["h3_id"], k=1)) - {row["h3_id"]})
+    valid = [n for n in neighbors if n in pivot_hostility.columns]
+    week  = row["week"]
+    if valid and week in pivot_hostility.index:
+        neighbor_gdelt_hostility_avg.append(pivot_hostility.loc[week, valid].mean())
+    else:
+        neighbor_gdelt_hostility_avg.append(0.0)
+
+merged["neighbor_gdelt_hostility_avg"] = neighbor_gdelt_hostility_avg
+
 # ── Save ──────────────────────────────────────────────────────────────────────
 merged.to_csv(OUT_PATH, index=False)
 print(f"\nSaved {len(merged):,} rows to {OUT_PATH}")
-print(f"New columns: gdelt_event_count, gdelt_avg_tone, gdelt_min_goldstein, gdelt_avg_goldstein, gdelt_num_articles, gdelt_hostility")
+print(f"New columns: gdelt_event_count, gdelt_avg_tone, gdelt_min_goldstein, gdelt_avg_goldstein, gdelt_num_articles, gdelt_hostility, neighbor_gdelt_hostility_avg")
