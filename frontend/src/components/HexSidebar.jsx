@@ -67,7 +67,7 @@ export function HexSidebar({ h3Id, onClose }) {
           <div style={styles.section}>
             <div style={styles.label}>
               Intelligence Summary
-              <span style={{ color: '#555', fontWeight: 400, marginLeft: 6 }}>· live news</span>
+              <span style={{ color: '#3a7bd5', fontWeight: 500, marginLeft: 6, fontSize: 10 }}>⚡ web-grounded</span>
             </div>
             {narLoading ? (
               <div style={styles.narrativeSkeleton}>

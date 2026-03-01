@@ -8,7 +8,9 @@ Uses google-genai SDK with gemini-2.5-flash.
 """
 
 import os
+import re
 from google import genai
+from google.genai import types
 from dotenv import load_dotenv
 
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), ".env"))
@@ -117,22 +119,38 @@ Risk level: {s_tier} (ML model gives {s_score:.0%} probability of dangerous even
 
 {trigger_block}
 
-Write 2-3 sentences in plain, human language that:
+Search the web for the latest news about this specific location, then write 2-3 sentences in plain, human language that:
 1. Identify the specific place (city, district, or border region) at these coordinates
-2. Explain what the risk signals mean in plain terms — no numbers or acronyms
-3. Summarize recent conflict context you know about this area and what a civilian should be aware of
+2. Explain what the risk signals mean in context of recent events you found — no raw numbers or acronyms
+3. Summarize the most recent conflict developments a civilian should know about right now
 
-Be factual, direct, and grounded. Do not use bullet points or headers."""
+Be factual, direct, and grounded in current reporting. Do not use bullet points or headers."""
 
     try:
         client = _get_client()
         response = client.models.generate_content(
             model="gemini-2.5-flash",
             contents=prompt,
+            config=types.GenerateContentConfig(
+                tools=[types.Tool(google_search=types.GoogleSearch())],
+            ),
         )
-        return response.text.strip()
+        # Strip citation markers like [1], [2] from grounded responses
+        text = response.text.strip()
+        text = re.sub(r'\[\d+\]', '', text).strip()
+        return text
     except Exception as e:
         print(f"  Gemini explain_hex failed: {e}")
+        # Fallback: try without grounding
+        try:
+            client = _get_client()
+            response = client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=prompt,
+            )
+            return response.text.strip()
+        except Exception as e2:
+            print(f"  Gemini explain_hex fallback also failed: {e2}")
         if alert_text:
             return alert_text
         if trigger_lines:
