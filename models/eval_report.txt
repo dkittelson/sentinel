@@ -1,17 +1,17 @@
 Sentinel XGBoost — Evaluation Report
 ==================================================
 
-CV Mean ROC-AUC:       0.730 ± 0.022
-CV Mean Avg Precision: 0.473 ± 0.064
+CV Mean ROC-AUC:       0.706 ± 0.018
+CV Mean Avg Precision: 0.457 ± 0.048
 
-Final Test ROC-AUC:       0.768
-Final Test Avg Precision: 0.574
+Final Test ROC-AUC:       0.743
+Final Test Avg Precision: 0.549
 
                precision    recall  f1-score   support
 
-No Escalation       0.90      0.48      0.63      2619
-   Escalation       0.39      0.86      0.54      1016
+No Escalation       0.92      0.30      0.45      2705
+   Escalation       0.31      0.92      0.46       930
 
-     accuracy                           0.59      3635
-    macro avg       0.64      0.67      0.58      3635
- weighted avg       0.76      0.59      0.60      3635
+     accuracy                           0.46      3635
+    macro avg       0.61      0.61      0.46      3635
+ weighted avg       0.76      0.46      0.45      3635

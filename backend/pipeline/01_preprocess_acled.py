@@ -63,6 +63,16 @@ df["h3_id"] = df.apply(
 # Aggregate into weekly bins per hex — this is the unit the ML model trains on
 df["week"] = df["event_date"].dt.to_period("W").dt.start_time
 
+# ── Actor Novelty Pre-computation ────────────────────────────────────────────
+# Track unique actor pairs per hex-week. New pairs (never seen before in this hex)
+# are a strong leading indicator — a new armed group entering a hex often precedes
+# the first violent event by 1-2 weeks.
+print("Computing actor novelty features...")
+
+df["actor_pair"] = (
+    df["actor1"].fillna("unknown") + "||" + df["actor2"].fillna("unknown")
+)
+
 # ── Aggregate Features per (h3_id, week) ─────────────────────────────────────
 print("Aggregating features per hex-week...")
 
@@ -75,7 +85,22 @@ agg = df.groupby(["h3_id", "week"]).agg(
     vac_count         = ("event_type", lambda x: (x == "Violence against civilians").sum()),
     population_best   = ("population_best", "max"),  # static per location
     unique_actors     = ("actor1", "nunique"),
+    actor_pair_count  = ("actor_pair", "nunique"),  # distinct actor1-actor2 combos
 ).reset_index()
+
+# Actor pair velocity: change in unique actor pairs vs prior week
+# Spike in new actor combinations = new actors entering the conflict space
+agg = agg.sort_values(["h3_id", "week"])
+agg["actor_pair_delta"] = (
+    agg.groupby("h3_id")["actor_pair_count"].diff().fillna(0)
+)
+agg["actor_pair_roll4w"] = (
+    agg.groupby("h3_id")["actor_pair_count"]
+    .transform(lambda x: x.rolling(4, min_periods=1).mean())
+)
+agg["actor_pair_velocity"] = (
+    agg["actor_pair_count"] / (agg["actor_pair_roll4w"] + 1e-6)
+)
 
 # ── Rolling Features (per hex, sorted by time) ───────────────────────────────
 print("Computing rolling features...")
@@ -144,24 +169,32 @@ for _, row in tqdm(agg.iterrows(), total=len(agg), desc="  Spatial lag"):
 agg["neighbor_event_avg"] = neighbor_event_avg
 agg["neighbor_fatal_sum"] = neighbor_fatal_sum
 
-# ── Label: Escalation in Next Week ───────────────────────────────────────────
-# Binary label: did event_count INCREASE next week in this hex?
-# This is what XGBoost will predict.
-print("Generating escalation labels...")
+# ── Labels ───────────────────────────────────────────────────────────────────
+print("Generating labels...")
 
-agg["next_week_events"] = (
-    agg.groupby("h3_id")["event_count"].shift(-1)
-)
+agg["next_week_events"]     = agg.groupby("h3_id")["event_count"].shift(-1)
+agg["next_week_fatalities"] = agg.groupby("h3_id")["total_fatalities"].shift(-1)
+
+# Primary label (NEW): will ANY fatality occur in this hex next week?
+# This is more directly relevant for civilian danger than tracking event count trends.
 agg["label_escalation"] = (
+    (agg["next_week_fatalities"] > 0).astype(int)
+)
+
+# Secondary label (OLD, kept for reference): did event count increase?
+agg["label_trend"] = (
     (agg["next_week_events"] > agg["event_count"]).astype(int)
 )
 
 # Drop the last week per hex (no label available)
-agg = agg.dropna(subset=["next_week_events"])
+agg = agg.dropna(subset=["next_week_fatalities"])
 
 # ── Save ──────────────────────────────────────────────────────────────────────
 agg.to_csv(OUT_PATH, index=False)
 print(f"\nSaved {len(agg):,} hex-week rows to {OUT_PATH}")
-print(f"Unique hexes: {agg['h3_id'].nunique():,}")
-print(f"Date range:   {agg['week'].min()} → {agg['week'].max()}")
-print(f"Label balance:\n{agg['label_escalation'].value_counts(normalize=True).round(3)}")
+print(f"Unique hexes:  {agg['h3_id'].nunique():,}")
+print(f"Date range:    {agg['week'].min()} → {agg['week'].max()}")
+print(f"Label balance (fatality next week):")
+print(f"{agg['label_escalation'].value_counts(normalize=True).round(3)}")
+print(f"\nOld label balance (event count increase):")
+print(f"{agg['label_trend'].value_counts(normalize=True).round(3)}")

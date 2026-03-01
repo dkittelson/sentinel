@@ -17,8 +17,9 @@ import matplotlib.pyplot as plt
 import os
 
 # ── Config ────────────────────────────────────────────────────────────────────
-# Use richest available data file (add GDELT/FIRMS as they become available)
+# Use richest available data file (add GDELT/FIRMS/weather as they become available)
 for candidate in [
+    "data/processed/acled_h3_gdelt_firms_weather.csv",
     "data/processed/acled_h3_gdelt_firms.csv",
     "data/processed/acled_h3_gdelt.csv",
     "data/processed/acled_h3.csv",
@@ -53,6 +54,10 @@ BASE_FEATURES = [
     # Spatial lag
     "neighbor_event_avg",
     "neighbor_fatal_sum",
+    # Actor novelty
+    "actor_pair_count",
+    "actor_pair_delta",
+    "actor_pair_velocity",
 ]
 
 # GDELT features (available after 03_ingest_gdelt.py)
@@ -72,8 +77,18 @@ FIRMS_FEATURES = [
     "firms_avg_frp",
     "firms_max_frp",
     "firms_spike",
-    "neighbor_firms_spike_sum",  # spatial lag: how many ring-1 neighbors also have thermal spikes
 ]
+
+# Weather features (available after 05_ingest_weather.py)
+WEATHER_FEATURES = [
+    "weather_temp_max",
+    "weather_temp_mean",
+    "weather_temp_anomaly",
+    "weather_precip_sum",
+    "weather_precip_anomaly",
+    "weather_drought_days",
+]
+
 LABEL = "label_escalation"
 
 # ── Load ──────────────────────────────────────────────────────────────────────
@@ -92,10 +107,18 @@ for col in GDELT_FEATURES:
 for col in FIRMS_FEATURES:
     if col in df.columns:
         FEATURES.append(col)
+for col in WEATHER_FEATURES:
+    if col in df.columns:
+        FEATURES.append(col)
 
-gdelt_active = any(c in df.columns for c in GDELT_FEATURES)
-firms_active = any(c in df.columns for c in FIRMS_FEATURES)
-print(f"  Feature set: base + {'GDELT ' if gdelt_active else ''}{'FIRMS' if firms_active else ''} ({len(FEATURES)} features total)")
+gdelt_active   = any(c in df.columns for c in GDELT_FEATURES)
+firms_active   = any(c in df.columns for c in FIRMS_FEATURES)
+weather_active = any(c in df.columns for c in WEATHER_FEATURES)
+print(f"  Feature set: base"
+      f"{' + GDELT' if gdelt_active else ''}"
+      f"{' + FIRMS' if firms_active else ''}"
+      f"{' + WEATHER' if weather_active else ''}"
+      f" ({len(FEATURES)} features total)")
 
 X = df[FEATURES].fillna(0)
 y = df[LABEL]

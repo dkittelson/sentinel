@@ -23,11 +23,20 @@ Lebanon + Northern Israel + Southern Syria (Levant corridor)
 ## Current Model Performance
 | Metric | Value |
 |---|---|
-| CV Mean ROC-AUC | 0.729 +/- 0.022 |
-| Final Test ROC-AUC | 0.764 |
-| Escalation Recall | 0.86 |
-| Escalation Precision | 0.37 |
+| CV Mean ROC-AUC | 0.706 +/- 0.018 |
+| Final Test ROC-AUC | 0.743 |
+| Escalation Recall | 0.92 |
+| Escalation Precision | 0.31 |
 | Threshold | 0.40 (recall-biased, intentional) |
+| Label | next_week_fatalities > 0 (will someone die here next week?) |
+
+### Label Redesign (v2)
+Changed primary label from "did event_count increase?" to "next_week_fatalities > 0".
+Old label was noisy (1→2 events counted as escalation) and not civilian-relevant.
+New label asks the direct question: will someone die in this hex next week?
+Result: recall improved 0.86→0.92 at cost of precision 0.37→0.31 and AUC 0.764→0.743.
+This tradeoff is correct for a civilian warning system -- missing fatal weeks is worse than false alarms.
+Old label kept as `label_trend` in acled_h3.csv for reference.
 
 ### Precision Ceiling -- Confirmed
 Ran 20+ experiments across: stricter labels, z-score features, interaction terms,
@@ -35,6 +44,18 @@ log transforms, seasonal features, Random Forest, calibrated XGB, alternate labe
 definitions, hyperparameter sweeps. NONE beat both precision AND recall vs baseline
 simultaneously. This is the Bayes error limit on open-source OSINT data -- confirmed.
 Precision will improve at inference time when GDELT/FIRMS provide live (not lagged) signal.
+
+### Architecture: Two-Layer Alerting
+- **Strategic layer** (XGBoost weekly): "Is this hex trending toward escalation?" → 0.0-1.0 score
+- **Tactical layer** (rule-based immediate, backend/tactical_alert.py): "Is this hex dangerous RIGHT NOW?"
+  Uses live FIRMS + GDELT thresholds; no ML needed; CLEAR/WATCH/WARNING/DANGER tiers
+  Triggers FCM push when tactical score ≥ 0.75 (DANGER tier)
+
+### New Features (v2, 32 total)
+Added actor novelty features to BASE_FEATURES:
+- actor_pair_count -- unique (actor1, actor2) pairs active in hex-week
+- actor_pair_delta -- week-over-week change in actor pairs (new actors entering conflict)
+- actor_pair_velocity -- actor_pair_count / 4w rolling baseline (novelty momentum)
 
 ---
 
@@ -87,6 +108,10 @@ Precision will improve at inference time when GDELT/FIRMS provide live (not lagg
 - [x] Build 04_ingest_firms.py -- pull NASA FIRMS SP archive thermal anomalies per hex-week
 - [x] Merge GDELT + FIRMS features into training data and retrain
 - [x] Run 23 precision improvement experiments -- confirmed Bayes error ceiling, shipped baseline
+- [x] Redesign label: next_week_fatalities > 0 (more direct civilian danger signal, recall 0.86→0.92)
+- [x] Add actor novelty features: actor_pair_count, actor_pair_delta, actor_pair_velocity
+- [x] Build backend/tactical_alert.py -- rule-based immediate danger layer (CLEAR/WATCH/WARNING/DANGER)
+- [x] Retrain final model with all features + new label (ROC-AUC 0.743, recall 0.92)
 
 ### Phase 2 -- Backend
 - [ ] Set up Supabase project (managed Postgres + PostGIS, free tier)
