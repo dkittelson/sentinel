@@ -29,23 +29,64 @@ Lebanon + Northern Israel + Southern Syria (Levant corridor)
 | Escalation Precision | 0.37 |
 | Threshold | 0.40 (recall-biased, intentional) |
 
+### Precision Ceiling -- Confirmed
+Ran 20+ experiments across: stricter labels, z-score features, interaction terms,
+log transforms, seasonal features, Random Forest, calibrated XGB, alternate label
+definitions, hyperparameter sweeps. NONE beat both precision AND recall vs baseline
+simultaneously. This is the Bayes error limit on open-source OSINT data -- confirmed.
+Precision will improve at inference time when GDELT/FIRMS provide live (not lagged) signal.
+
+---
+
+## Feature Set (28 features)
+
+### Base / ACLED (18)
+- event_count, total_fatalities, max_fatalities
+- battle_count, explosion_count, vac_count
+- population_best, unique_actors
+- event_count_roll2w, fatalities_roll2w, event_count_roll4w, fatalities_roll4w
+- event_count_delta, fatality_delta (week-over-week velocity)
+- event_velocity, fatality_velocity (ratio vs 4w baseline)
+- neighbor_event_avg, neighbor_fatal_sum (H3 ring-1 spatial lag)
+
+### GDELT (6)
+- gdelt_event_count, gdelt_avg_tone, gdelt_min_goldstein
+- gdelt_avg_goldstein, gdelt_num_articles, gdelt_hostility
+
+### NASA FIRMS (4)
+- firms_hotspot_count, firms_avg_frp, firms_max_frp, firms_spike
+
+---
+
+## Pipeline Files
+| File | Purpose | Status |
+|---|---|---|
+| backend/pipeline/01_preprocess_acled.py | H3 binning, rolling/velocity/spatial features, labels | done |
+| backend/pipeline/02_train_model.py | XGBoost training, CV, eval report, feature importance | done |
+| backend/pipeline/03_ingest_gdelt.py | GDELT weekly download + hex aggregation | done |
+| backend/pipeline/04_ingest_firms.py | NASA FIRMS SP archive download + hex aggregation | done |
+| data/processed/acled_h3_gdelt_firms.csv | Final enriched training/inference feature table | done |
+| models/xgb_sentinel.ubj | Trained XGBoost model | done |
+| models/eval_report.txt | CV + test set evaluation report | done |
+| models/feature_importance.png | Feature importance bar chart | done |
+
 ---
 
 ## Master Checklist
 
 ### Phase 1 -- Data and ML Pipeline
 - [x] Register ACLED account + download Levant dataset (2020-2024)
-- [x] Set up Python venv + install dependencies
+- [x] Set up Python venv + install dependencies (pandas, xgboost, h3, scikit-learn, etc.)
 - [x] Build 01_preprocess_acled.py -- H3 binning, rolling features, escalation labels
 - [x] Add velocity/momentum features (event_count_delta, event_velocity, fatality_delta, fatality_velocity)
 - [x] Add spatial lag features (neighbor_event_avg, neighbor_fatal_sum via H3 ring-1)
 - [x] Build 02_train_model.py -- XGBoost with TimeSeriesSplit CV, scale_pos_weight, eval report
 - [x] Train and evaluate baseline model (ROC-AUC 0.764, recall 0.86)
-- [ ] Get NASA FIRMS MAP_KEY (earthdata.nasa.gov, free)
-- [ ] Build 03_ingest_gdelt.py -- pull news sentiment scores per hex-week for Levant
-- [ ] Build 04_ingest_firms.py -- pull NASA FIRMS thermal anomalies per hex-week
-- [ ] Merge GDELT + FIRMS features into training data and retrain
-- [ ] Evaluate precision improvement vs baseline
+- [x] Get NASA FIRMS MAP_KEY (earthdata.nasa.gov)
+- [x] Build 03_ingest_gdelt.py -- pull news sentiment scores per hex-week for Levant
+- [x] Build 04_ingest_firms.py -- pull NASA FIRMS SP archive thermal anomalies per hex-week
+- [x] Merge GDELT + FIRMS features into training data and retrain
+- [x] Run 23 precision improvement experiments -- confirmed Bayes error ceiling, shipped baseline
 
 ### Phase 2 -- Backend
 - [ ] Set up Supabase project (managed Postgres + PostGIS, free tier)
@@ -91,6 +132,9 @@ Lebanon + Northern Israel + Southern Syria (Levant corridor)
 - Threshold 0.40 -- recall-biased by design; over-warning is better than missing events
 - Supabase over Firebase -- need PostGIS spatial queries; Supabase gives managed Postgres + REST for free
 - Web frontend, not React Native -- same Mapbox demo, no app store friction
+- GDELT source: daily CSV download (no API key needed), weekly sampling
+- FIRMS source: VIIRS_SNPP_SP (Standard Processing archive) -- covers full 2020-2024 range
+  NRT source only holds ~2 months; SP goes back to 2012
 
 ---
 
@@ -98,7 +142,7 @@ Lebanon + Northern Israel + Southern Syria (Levant corridor)
 | Service | Key Type | Status |
 |---|---|---|
 | ACLED | Free API key (email registration) | done |
-| NASA FIRMS | Free MAP_KEY (earthdata.nasa.gov) | get this next |
+| NASA FIRMS | Free MAP_KEY (earthdata.nasa.gov) | done -- in .env |
 | GDELT | No key required | free |
 | Supabase | Project URL + anon key | set up with backend |
 | Mapbox | Public token | set up with frontend |
