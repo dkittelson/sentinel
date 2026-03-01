@@ -1,14 +1,105 @@
-ML Pipeline
-Raw APIs → Spatial Preprocessing → ML Model →  AI Agent → Final Output
-Raw APIs: Ingest historical conflict data (ACLED), live news sentiment (GDELT), and live thermal satellite data (NASA FIRMS).
-Spatial Preprocessing: Group all the raw coordinate data into uniform hexagonal geographical bins (using Uber's H3 library) and calculate rolling averages for each hex.
-ML Model (XGBoost): The model takes the features for a specific hex and outputs a probability score (0.0 to 1.0) of an imminent violent event.
-AI Agent (LLM): If the score crosses the "Red" threshold (e.g., > 0.7), an LLM reads the specific features that triggered it (e.g., "thermal spike + troop movement news") and drafts a human-readable warning.
-Final Output: A numeric risk tier (Yellow, Orange, Red) and a localized alert message.
+# Sentinel -- Conflict Early Warning System
 
-App
-Database (PostgreSQL + PostGIS): Stores the H3 hex grids, the ingested API data, and the latest risk scores for every location. (PostGIS is crucial here because it is built for querying geographic coordinates).
-Backend (FastAPI in Python): Runs the scheduled cron jobs to pull new API data, feeds that data through your ML pipeline, updates the database, and serves data to the app.
-Frontend (React Native or Flutter): The mobile app. It uses Mapbox GL JS to display a dark-mode map of the region, pulling the hex grid colors from your FastAPI backend.
-Alerting (Firebase Cloud Messaging): When the backend upgrades a hex to Red, FCM pushes the AI-generated notification directly to the user's phone based on their current GPS location.
+## Architecture Overview
 
+Raw APIs -> Spatial Preprocessing -> ML Model -> AI Agent -> Final Output
+
+- **Raw APIs:** ACLED (historical ground truth), GDELT 2.0 (live news sentiment), NASA FIRMS (thermal anomalies)
+- **Spatial Preprocessing:** H3 hexagonal binning (resolution 6), rolling averages, velocity/delta features, spatial lag from neighbors
+- **ML Model (XGBoost):** Outputs 0.0-1.0 escalation probability per hex per week -> Yellow / Orange / Red tier
+- **AI Agent (LLM):** When hex crosses Red threshold (>0.7), drafts human-readable contextual alert from triggering features
+- **App:** FastAPI backend + Mapbox hex overlay frontend + FCM push alerts by GPS
+
+---
+
+## Region
+Lebanon + Northern Israel + Southern Syria (Levant corridor)
+- Training data: 2020-01-01 to 2024-12-31
+- ACLED rows after cleaning: ~73,900
+- Hex-week training samples: 36,345 across 2,973 unique H3 hexes
+
+---
+
+## Current Model Performance
+| Metric | Value |
+|---|---|
+| CV Mean ROC-AUC | 0.729 +/- 0.022 |
+| Final Test ROC-AUC | 0.764 |
+| Escalation Recall | 0.86 |
+| Escalation Precision | 0.37 |
+| Threshold | 0.40 (recall-biased, intentional) |
+
+---
+
+## Master Checklist
+
+### Phase 1 -- Data and ML Pipeline
+- [x] Register ACLED account + download Levant dataset (2020-2024)
+- [x] Set up Python venv + install dependencies
+- [x] Build 01_preprocess_acled.py -- H3 binning, rolling features, escalation labels
+- [x] Add velocity/momentum features (event_count_delta, event_velocity, fatality_delta, fatality_velocity)
+- [x] Add spatial lag features (neighbor_event_avg, neighbor_fatal_sum via H3 ring-1)
+- [x] Build 02_train_model.py -- XGBoost with TimeSeriesSplit CV, scale_pos_weight, eval report
+- [x] Train and evaluate baseline model (ROC-AUC 0.764, recall 0.86)
+- [ ] Get NASA FIRMS MAP_KEY (earthdata.nasa.gov, free)
+- [ ] Build 03_ingest_gdelt.py -- pull news sentiment scores per hex-week for Levant
+- [ ] Build 04_ingest_firms.py -- pull NASA FIRMS thermal anomalies per hex-week
+- [ ] Merge GDELT + FIRMS features into training data and retrain
+- [ ] Evaluate precision improvement vs baseline
+
+### Phase 2 -- Backend
+- [ ] Set up Supabase project (managed Postgres + PostGIS, free tier)
+- [ ] Design DB schema: hex_grid, risk_scores, acled_events, gdelt_signals, firms_anomalies
+- [ ] Build main.py FastAPI server
+  - [ ] GET /hexes -- returns all hex IDs + current risk score + tier
+  - [ ] GET /hex/{h3_id} -- returns full feature breakdown for one hex
+  - [ ] GET /hexes/region?lat=&lon=&radius_km= -- spatial query around GPS point
+  - [ ] POST /ingest/run -- manually trigger full pipeline refresh
+- [ ] Build cron job scheduler (APScheduler) to pull GDELT + FIRMS every 15 min
+- [ ] Build 05_score_live.py -- loads saved XGBoost model, runs inference on latest hex features, writes scores to DB
+- [ ] Add .env support for all API keys (ACLED, FIRMS MAP_KEY, Supabase URL/key)
+
+### Phase 3 -- AI Alerting Agent
+- [ ] Choose LLM (OpenAI GPT-4o or Claude claude-sonnet-4-5 via API)
+- [ ] Build alerting_agent.py -- reads top triggering features for a Red hex, constructs prompt, returns alert text
+- [ ] Prompt includes: hex location name, event types, fatality delta, neighbor pressure, GDELT sentiment, FIRMS spike
+- [ ] Integrate with FastAPI: when a hex flips to Red, auto-call agent and store alert text in DB
+
+### Phase 4 -- Frontend
+- [ ] Set up React web app (recommended over React Native for hackathon speed)
+- [ ] Set up Mapbox GL JS with dark mode base map
+- [ ] Render H3 hex grid as GeoJSON polygon layer, colored by risk tier (Yellow / Orange / Red)
+- [ ] Fetch hex data from FastAPI /hexes endpoint on interval
+- [ ] Click on hex -> show feature breakdown sidebar (event count, fatalities, GDELT sentiment, FIRMS spike, AI alert text)
+- [ ] Auto-center map on user GPS location (browser Geolocation API)
+
+### Phase 5 -- Alerting
+- [ ] Set up Firebase project + FCM
+- [ ] Backend: when hex flips to Red, send FCM push to users whose GPS is within that hex or ring-1 neighbors
+- [ ] Frontend: register FCM token and handle push notification display
+
+### Phase 6 -- Demo Prep
+- [ ] Backtest demo: render map Oct 2023 (pre-escalation) -> Nov 2023, show model predicting the ramp
+- [ ] Prepare precision/recall curve + AUC score slide for judges
+- [ ] Satellite CV layer listed as Phase 2 roadmap item only -- do NOT build for hackathon
+
+---
+
+## Key Design Decisions (Locked)
+- H3 resolution 6 (~36km2 hexes) -- coarse enough to aggregate signal, fine enough for civilian relevance
+- Training label: did event_count increase next week? (binary escalation, not severity)
+- Threshold 0.40 -- recall-biased by design; over-warning is better than missing events
+- Supabase over Firebase -- need PostGIS spatial queries; Supabase gives managed Postgres + REST for free
+- Web frontend, not React Native -- same Mapbox demo, no app store friction
+
+---
+
+## API Keys Needed
+| Service | Key Type | Status |
+|---|---|---|
+| ACLED | Free API key (email registration) | done |
+| NASA FIRMS | Free MAP_KEY (earthdata.nasa.gov) | get this next |
+| GDELT | No key required | free |
+| Supabase | Project URL + anon key | set up with backend |
+| Mapbox | Public token | set up with frontend |
+| OpenAI / Anthropic | API key | set up with alerting agent |

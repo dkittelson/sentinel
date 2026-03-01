@@ -1,6 +1,7 @@
 """
 Step 2: XGBoost Model Training
 Trains a binary classifier to predict escalation in the next week for a given H3 hex.
+Auto-detects the richest available feature file (ACLED+GDELT+FIRMS > ACLED+GDELT > ACLED only).
 Output: models/xgb_sentinel.ubj  (model)  +  models/eval_report.txt
 """
 
@@ -12,17 +13,26 @@ from sklearn.metrics import (
     classification_report, roc_auc_score,
     precision_recall_curve, average_precision_score
 )
-from sklearn.preprocessing import LabelEncoder
 import matplotlib.pyplot as plt
-import os, json
+import os
 
 # ── Config ────────────────────────────────────────────────────────────────────
-PROCESSED_PATH = "data/processed/acled_h3.csv"
-MODEL_OUT       = "models/xgb_sentinel.ubj"
-REPORT_OUT      = "models/eval_report.txt"
-PLOT_OUT        = "models/feature_importance.png"
+# Use richest available data file (add GDELT/FIRMS as they become available)
+for candidate in [
+    "data/processed/acled_h3_gdelt_firms.csv",
+    "data/processed/acled_h3_gdelt.csv",
+    "data/processed/acled_h3.csv",
+]:
+    if os.path.exists(candidate):
+        PROCESSED_PATH = candidate
+        break
 
-FEATURES = [
+MODEL_OUT  = "models/xgb_sentinel.ubj"
+REPORT_OUT = "models/eval_report.txt"
+PLOT_OUT   = "models/feature_importance.png"
+
+# Base features always present
+BASE_FEATURES = [
     "event_count",
     "total_fatalities",
     "max_fatalities",
@@ -44,6 +54,24 @@ FEATURES = [
     "neighbor_event_avg",
     "neighbor_fatal_sum",
 ]
+
+# GDELT features (available after 03_ingest_gdelt.py)
+GDELT_FEATURES = [
+    "gdelt_event_count",
+    "gdelt_avg_tone",
+    "gdelt_min_goldstein",
+    "gdelt_avg_goldstein",
+    "gdelt_num_articles",
+    "gdelt_hostility",
+]
+
+# FIRMS features (available after 04_ingest_firms.py)
+FIRMS_FEATURES = [
+    "firms_hotspot_count",
+    "firms_avg_frp",
+    "firms_max_frp",
+    "firms_spike",
+]
 LABEL = "label_escalation"
 
 # ── Load ──────────────────────────────────────────────────────────────────────
@@ -53,6 +81,19 @@ df = df.sort_values("week").reset_index(drop=True)
 
 print(f"  Rows: {len(df):,}  |  Hexes: {df['h3_id'].nunique():,}")
 print(f"  Label balance: {df[LABEL].value_counts(normalize=True).round(3).to_dict()}")
+
+# Dynamically include only features present in this file
+FEATURES = BASE_FEATURES.copy()
+for col in GDELT_FEATURES:
+    if col in df.columns:
+        FEATURES.append(col)
+for col in FIRMS_FEATURES:
+    if col in df.columns:
+        FEATURES.append(col)
+
+gdelt_active = any(c in df.columns for c in GDELT_FEATURES)
+firms_active = any(c in df.columns for c in FIRMS_FEATURES)
+print(f"  Feature set: base + {'GDELT ' if gdelt_active else ''}{'FIRMS' if firms_active else ''} ({len(FEATURES)} features total)")
 
 X = df[FEATURES].fillna(0)
 y = df[LABEL]
