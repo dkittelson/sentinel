@@ -1,7 +1,18 @@
 """
-Step 1: ACLED Data Preprocessing + H3 Binning
-Ingests raw ACLED CSV, cleans it, and aggregates events into H3 hexagonal grid cells.
-Now includes velocity/momentum features and spatial lag features.
+Step 1: ACLED Data Preprocessing + H3 Binning (Daily Grain, 48h Lookahead)
+
+Aggregates ACLED events into H3 hex-day cells and labels each cell:
+  next_48h_dangerous = 1  if ANY dangerous event occurs in that hex within the next 48 hours
+
+"Dangerous" = anything that threatens an ordinary civilian:
+  - All Battles (armed clashes, territorial takeovers)
+  - All Explosions/Remote violence (airstrikes, IEDs, shelling)
+  - All Violence against civilians (attacks, abductions, sexual violence, suicide bombs)
+  - All Riots (mob violence, looting, violent demonstrations)
+  - Violent protest subtypes (excessive force, protest with intervention)
+
+Excludes Strategic developments (non-violent admin events) and peaceful protests.
+
 Output: data/processed/acled_h3.csv
 """
 
@@ -14,19 +25,22 @@ from tqdm import tqdm
 RAW_PATH = "data/raw/ACLED Data_2026-03-01.csv"
 OUT_PATH  = "data/processed/acled_h3.csv"
 
-# H3 resolution 6 ≈ ~36 km² hexagons — coarse enough to aggregate signal,
-# fine enough to be spatially meaningful for civilian warnings.
-H3_RESOLUTION = 6
+H3_RESOLUTION    = 6   # ~36 km² hexagons
+GEO_PRECISION_MAX = 2  # 1=exact, 2=town-level; drop village-approximated coords
 
-# Only keep high-precision coordinates (1 = exact location, 2 = town-level)
-GEO_PRECISION_MAX = 2
-
-# Event types that represent actual violence (drop protests, riots, etc.)
-VIOLENT_EVENTS = {
+# Event types where ALL sub-events are dangerous to civilians
+DANGEROUS_TYPES = {
     "Battles",
     "Explosions/Remote violence",
     "Violence against civilians",
-    "Strategic developments",  # includes abductions, base activity
+    "Riots",
+}
+
+# Protest sub-events that are dangerous (police/military violence at demonstrations)
+DANGEROUS_PROTEST_SUBS = {
+    "Excessive force against protesters",
+    "Protest with intervention",
+    "Violent demonstration",
 }
 
 # ── Load ──────────────────────────────────────────────────────────────────────
@@ -35,166 +49,197 @@ df = pd.read_csv(RAW_PATH, low_memory=False)
 print(f"  Raw rows: {len(df):,}")
 
 # ── Clean ─────────────────────────────────────────────────────────────────────
-# Parse date
 df["event_date"] = pd.to_datetime(df["event_date"], dayfirst=True, errors="coerce")
 df = df.dropna(subset=["event_date", "latitude", "longitude"])
-
-# Drop low-precision coordinates
 df = df[df["geo_precision"] <= GEO_PRECISION_MAX]
 
-# Keep only violent event types
-df = df[df["event_type"].isin(VIOLENT_EVENTS)]
-
-# Ensure numeric fatalities
-df["fatalities"] = pd.to_numeric(df["fatalities"], errors="coerce").fillna(0)
+df["fatalities"]      = pd.to_numeric(df["fatalities"],      errors="coerce").fillna(0)
 df["population_best"] = pd.to_numeric(df["population_best"], errors="coerce").fillna(0)
 
 print(f"  After cleaning: {len(df):,} rows")
 
+# ── Flag Dangerous Events ─────────────────────────────────────────────────────
+# "Dangerous" = anything that threatens an ordinary civilian's life or safety.
+# Excludes Strategic developments (non-violent admin) and peaceful protests.
+df["is_dangerous"] = (
+    df["event_type"].isin(DANGEROUS_TYPES) |
+    df["sub_event_type"].isin(DANGEROUS_PROTEST_SUBS)
+).astype(int)
+
+# Per-type flags for feature engineering
+df["is_battle"]    = (df["event_type"] == "Battles").astype(int)
+df["is_explosion"] = (df["event_type"] == "Explosions/Remote violence").astype(int)
+df["is_vac"]       = (df["event_type"] == "Violence against civilians").astype(int)
+df["is_riot"]      = (df["event_type"] == "Riots").astype(int)
+
+print(f"  Dangerous events: {df['is_dangerous'].sum():,} / {len(df):,} "
+      f"({df['is_dangerous'].mean()*100:.1f}%)")
+
 # ── H3 Binning ────────────────────────────────────────────────────────────────
 print(f"Assigning H3 resolution-{H3_RESOLUTION} hex IDs...")
-
 df["h3_id"] = df.apply(
     lambda row: h3.latlng_to_cell(row["latitude"], row["longitude"], H3_RESOLUTION),
-    axis=1
+    axis=1,
 )
 
-# ── Temporal Windowing ────────────────────────────────────────────────────────
-# Aggregate into weekly bins per hex — this is the unit the ML model trains on
-df["week"] = df["event_date"].dt.to_period("W").dt.start_time
-
 # ── Actor Novelty Pre-computation ────────────────────────────────────────────
-# Track unique actor pairs per hex-week. New pairs (never seen before in this hex)
-# are a strong leading indicator — a new armed group entering a hex often precedes
-# the first violent event by 1-2 weeks.
-print("Computing actor novelty features...")
-
 df["actor_pair"] = (
     df["actor1"].fillna("unknown") + "||" + df["actor2"].fillna("unknown")
 )
 
-# ── Aggregate Features per (h3_id, week) ─────────────────────────────────────
-print("Aggregating features per hex-week...")
+# ── Aggregate per (h3_id, date) ──────────────────────────────────────────────
+print("Aggregating features per hex-day...")
 
-agg = df.groupby(["h3_id", "week"]).agg(
-    event_count       = ("event_type", "count"),
-    total_fatalities  = ("fatalities", "sum"),
-    max_fatalities    = ("fatalities", "max"),
-    battle_count      = ("event_type", lambda x: (x == "Battles").sum()),
-    explosion_count   = ("event_type", lambda x: (x == "Explosions/Remote violence").sum()),
-    vac_count         = ("event_type", lambda x: (x == "Violence against civilians").sum()),
-    population_best   = ("population_best", "max"),  # static per location
-    unique_actors     = ("actor1", "nunique"),
-    actor_pair_count  = ("actor_pair", "nunique"),  # distinct actor1-actor2 combos
+agg = df.groupby(["h3_id", "event_date"]).agg(
+    event_count       = ("event_type",      "count"),
+    dangerous_count   = ("is_dangerous",    "sum"),
+    total_fatalities  = ("fatalities",       "sum"),
+    max_fatalities    = ("fatalities",       "max"),
+    battle_count      = ("is_battle",        "sum"),
+    explosion_count   = ("is_explosion",     "sum"),
+    vac_count         = ("is_vac",           "sum"),
+    riot_count        = ("is_riot",          "sum"),
+    population_best   = ("population_best",  "max"),
+    unique_actors     = ("actor1",           "nunique"),
+    actor_pair_count  = ("actor_pair",       "nunique"),
 ).reset_index()
 
-# Actor pair velocity: change in unique actor pairs vs prior week
-# Spike in new actor combinations = new actors entering the conflict space
-agg = agg.sort_values(["h3_id", "week"])
-agg["actor_pair_delta"] = (
-    agg.groupby("h3_id")["actor_pair_count"].diff().fillna(0)
-)
-agg["actor_pair_roll4w"] = (
-    agg.groupby("h3_id")["actor_pair_count"]
-    .transform(lambda x: x.rolling(4, min_periods=1).mean())
-)
-agg["actor_pair_velocity"] = (
-    agg["actor_pair_count"] / (agg["actor_pair_roll4w"] + 1e-6)
+# ── Build Complete Hex-Day Panel ──────────────────────────────────────────────
+# Expand to every (hex, day) combination so rolling windows work correctly.
+# Missing days (no events) get zero-fill — the model must learn that silence matters.
+print("Building complete hex-day panel (every hex × every day)...")
+
+all_hexes = agg["h3_id"].unique()
+all_dates = pd.date_range(agg["event_date"].min(), agg["event_date"].max(), freq="D")
+
+idx = pd.MultiIndex.from_product([all_hexes, all_dates], names=["h3_id", "event_date"])
+panel = (
+    agg.set_index(["h3_id", "event_date"])
+    .reindex(idx, fill_value=0)
+    .reset_index()
 )
 
-# ── Rolling Features (per hex, sorted by time) ───────────────────────────────
-print("Computing rolling features...")
+# population_best is static per location — forward/backfill within hex
+panel["population_best"] = (
+    panel.groupby("h3_id")["population_best"]
+    .transform(lambda x: x.replace(0, np.nan).ffill().bfill().fillna(0))
+)
 
-agg = agg.sort_values(["h3_id", "week"])
+print(f"  Panel size: {len(panel):,} hex-day rows  |  {len(all_hexes):,} hexes  |  {len(all_dates):,} days")
 
-for window in [2, 4]:  # 2-week and 4-week rolling averages
-    agg[f"event_count_roll{window}w"] = (
-        agg.groupby("h3_id")["event_count"]
+# ── Rolling Features ─────────────────────────────────────────────────────────
+print("Computing rolling features (3d, 7d, 14d)...")
+
+panel = panel.sort_values(["h3_id", "event_date"])
+
+for window, label in [(3, "3d"), (7, "7d"), (14, "14d")]:
+    panel[f"dangerous_roll{label}"] = (
+        panel.groupby("h3_id")["dangerous_count"]
         .transform(lambda x: x.rolling(window, min_periods=1).mean())
     )
-    agg[f"fatalities_roll{window}w"] = (
-        agg.groupby("h3_id")["total_fatalities"]
+    panel[f"fatalities_roll{label}"] = (
+        panel.groupby("h3_id")["total_fatalities"]
+        .transform(lambda x: x.rolling(window, min_periods=1).mean())
+    )
+    panel[f"event_roll{label}"] = (
+        panel.groupby("h3_id")["event_count"]
         .transform(lambda x: x.rolling(window, min_periods=1).mean())
     )
 
 # ── Velocity / Momentum Features ─────────────────────────────────────────────
-# These capture acceleration, not just absolute level — key for distinguishing
-# a chronically active hex from one that is *suddenly* spiking.
-print("Computing velocity features...")
+panel["dangerous_delta"] = (
+    panel.groupby("h3_id")["dangerous_count"].diff().fillna(0)
+)
+panel["fatality_delta"] = (
+    panel.groupby("h3_id")["total_fatalities"].diff().fillna(0)
+)
+# Velocity: today vs 14-day baseline (>1.0 means spiking above normal)
+panel["dangerous_velocity"] = (
+    panel["dangerous_count"] / (panel["dangerous_roll14d"] + 1e-6)
+)
+panel["fatality_velocity"] = (
+    panel["total_fatalities"] / (panel["fatalities_roll14d"] + 1e-6)
+)
 
-agg["event_count_delta"] = (
-    agg.groupby("h3_id")["event_count"].diff().fillna(0)
+# ── Actor Novelty Features ───────────────────────────────────────────────────
+panel["actor_pair_delta"] = (
+    panel.groupby("h3_id")["actor_pair_count"].diff().fillna(0)
 )
-agg["fatality_delta"] = (
-    agg.groupby("h3_id")["total_fatalities"].diff().fillna(0)
+panel["actor_pair_roll14d"] = (
+    panel.groupby("h3_id")["actor_pair_count"]
+    .transform(lambda x: x.rolling(14, min_periods=1).mean())
 )
-# Velocity ratio: this week vs 4-week baseline (>1.0 means spiking above baseline)
-agg["event_velocity"] = (
-    agg["event_count"] / (agg["event_count_roll4w"] + 1e-6)
-)
-agg["fatality_velocity"] = (
-    agg["total_fatalities"] / (agg["fatalities_roll4w"] + 1e-6)
+panel["actor_pair_velocity"] = (
+    panel["actor_pair_count"] / (panel["actor_pair_roll14d"] + 1e-6)
 )
 
 # ── Spatial Lag Features ──────────────────────────────────────────────────────
-# For each hex-week, compute the average/sum activity in its ring-1 H3 neighbors.
-# Conflict spills over spatially — neighboring hex escalation is a strong predictor.
-print("Computing spatial lag features (this may take ~1 minute)...")
+# Vectorized approach: build pivot → compute neighbor mean per hex column.
+# Much faster than row-by-row loop (2,973 hexes × N neighbors vs 5.4M row iterations).
+print("Computing spatial lag features (H3 ring-1 neighbors, vectorized)...")
 
-# Build a lookup: h3_id → week → event_count / fatalities
-pivot_events = agg.pivot_table(
-    index="week", columns="h3_id", values="event_count", fill_value=0
+pivot_danger = panel.pivot_table(
+    index="event_date", columns="h3_id", values="dangerous_count", fill_value=0
 )
-pivot_fatal = agg.pivot_table(
-    index="week", columns="h3_id", values="total_fatalities", fill_value=0
+pivot_fatal = panel.pivot_table(
+    index="event_date", columns="h3_id", values="total_fatalities", fill_value=0
 )
 
-all_hexes = agg["h3_id"].unique()
+all_hexes = panel["h3_id"].unique()
 
-neighbor_event_avg = []
-neighbor_fatal_sum = []
+# Build neighbor map once
+neighbor_map = {
+    hx: [n for n in list(set(h3.grid_disk(hx, k=1)) - {hx}) if n in pivot_danger.columns]
+    for hx in tqdm(all_hexes, desc="  Building neighbor map")
+}
 
-for _, row in tqdm(agg.iterrows(), total=len(agg), desc="  Spatial lag"):
-    neighbors = list(set(h3.grid_disk(row["h3_id"], k=1)) - {row["h3_id"]})
-    # Only include neighbors that exist in our dataset
-    valid = [n for n in neighbors if n in pivot_events.columns]
-    week  = row["week"]
-    if valid and week in pivot_events.index:
-        neighbor_event_avg.append(pivot_events.loc[week, valid].mean())
-        neighbor_fatal_sum.append(pivot_fatal.loc[week, valid].sum())
+# Vectorized: for each hex, average its valid neighbors' columns
+neighbor_danger_cols = {}
+neighbor_fatal_cols  = {}
+for hx, neighbors in neighbor_map.items():
+    if neighbors:
+        neighbor_danger_cols[hx] = pivot_danger[neighbors].mean(axis=1)
+        neighbor_fatal_cols[hx]  = pivot_fatal[neighbors].sum(axis=1)
     else:
-        neighbor_event_avg.append(0.0)
-        neighbor_fatal_sum.append(0.0)
+        neighbor_danger_cols[hx] = pd.Series(0.0, index=pivot_danger.index)
+        neighbor_fatal_cols[hx]  = pd.Series(0.0, index=pivot_fatal.index)
 
-agg["neighbor_event_avg"] = neighbor_event_avg
-agg["neighbor_fatal_sum"] = neighbor_fatal_sum
+neighbor_danger_pivot = pd.DataFrame(neighbor_danger_cols, index=pivot_danger.index)
+neighbor_fatal_pivot  = pd.DataFrame(neighbor_fatal_cols,  index=pivot_fatal.index)
 
-# ── Labels ───────────────────────────────────────────────────────────────────
-print("Generating labels...")
+# Melt back to long format and merge
+nd = neighbor_danger_pivot.reset_index().melt(id_vars="event_date", var_name="h3_id", value_name="neighbor_danger_avg")
+nf = neighbor_fatal_pivot.reset_index().melt(id_vars="event_date",  var_name="h3_id", value_name="neighbor_fatal_sum")
 
-agg["next_week_events"]     = agg.groupby("h3_id")["event_count"].shift(-1)
-agg["next_week_fatalities"] = agg.groupby("h3_id")["total_fatalities"].shift(-1)
+panel = panel.merge(nd, on=["h3_id", "event_date"], how="left")
+panel = panel.merge(nf, on=["h3_id", "event_date"], how="left")
+panel[["neighbor_danger_avg", "neighbor_fatal_sum"]] = panel[["neighbor_danger_avg", "neighbor_fatal_sum"]].fillna(0)
 
-# Primary label (NEW): will ANY fatality occur in this hex next week?
-# This is more directly relevant for civilian danger than tracking event count trends.
-agg["label_escalation"] = (
-    (agg["next_week_fatalities"] > 0).astype(int)
-)
 
-# Secondary label (OLD, kept for reference): did event count increase?
-agg["label_trend"] = (
-    (agg["next_week_events"] > agg["event_count"]).astype(int)
-)
+# ── Label: next 72 hours ──────────────────────────────────────────────────────
+print("Generating 72h danger label...")
 
-# Drop the last week per hex (no label available)
-agg = agg.dropna(subset=["next_week_fatalities"])
+# A hex is "dangerous" in the next 72h if ANY dangerous event occurs
+# in t+1, t+2, OR t+3. We take the max so any day triggers a positive.
+panel["_next_1d"] = panel.groupby("h3_id")["dangerous_count"].shift(-1).fillna(0)
+panel["_next_2d"] = panel.groupby("h3_id")["dangerous_count"].shift(-2).fillna(0)
+panel["_next_3d"] = panel.groupby("h3_id")["dangerous_count"].shift(-3).fillna(0)
+panel["next_72h_dangerous_raw"] = panel[["_next_1d", "_next_2d", "_next_3d"]].max(axis=1)
+panel["label"] = (panel["next_72h_dangerous_raw"] > 0).astype(int)
+panel = panel.drop(columns=["_next_1d", "_next_2d", "_next_3d", "next_72h_dangerous_raw"])
+
+# Drop the last 3 days per hex (no valid 72h lookahead window)
+# Use rank-from-end to avoid groupby.apply dropping h3_id in pandas 2.x
+panel = panel.sort_values(["h3_id", "event_date"])
+panel["_rank_end"] = panel.groupby("h3_id").cumcount(ascending=False)
+panel = panel[panel["_rank_end"] >= 3].drop(columns=["_rank_end"]).reset_index(drop=True)
+
+label_balance = panel["label"].value_counts(normalize=True).round(3).to_dict()
+print(f"  Label balance: {label_balance}")
 
 # ── Save ──────────────────────────────────────────────────────────────────────
-agg.to_csv(OUT_PATH, index=False)
-print(f"\nSaved {len(agg):,} hex-week rows to {OUT_PATH}")
-print(f"Unique hexes:  {agg['h3_id'].nunique():,}")
-print(f"Date range:    {agg['week'].min()} → {agg['week'].max()}")
-print(f"Label balance (fatality next week):")
-print(f"{agg['label_escalation'].value_counts(normalize=True).round(3)}")
-print(f"\nOld label balance (event count increase):")
-print(f"{agg['label_trend'].value_counts(normalize=True).round(3)}")
+panel.to_csv(OUT_PATH, index=False)
+print(f"\nSaved {len(panel):,} hex-day rows → {OUT_PATH}")
+print(f"Unique hexes: {panel['h3_id'].nunique():,}  |  "
+      f"Date range: {panel['event_date'].min().date()} → {panel['event_date'].max().date()}")
+

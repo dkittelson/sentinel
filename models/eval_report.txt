@@ -1,17 +1,13 @@
-Sentinel XGBoost — Evaluation Report
-==================================================
+Sentinel XGBoost — Evaluation Report (72h label)
+=======================================================
 
-CV Mean ROC-AUC:       0.706 ± 0.018
-CV Mean Avg Precision: 0.457 ± 0.048
+CV Mean ROC-AUC:       0.841 ± 0.019
+CV Mean Avg Precision: 0.412 ± 0.087
 
-Final Test ROC-AUC:       0.743
-Final Test Avg Precision: 0.549
+Standard — ROC-AUC: 0.872  AUC-PR: 0.585
+Focal     — ROC-AUC: 0.873  AUC-PR: 0.594
 
-               precision    recall  f1-score   support
+Best Standard:  thresh=0.75  P=0.529  R=0.543  F1=0.536
+Best Focal:     thresh=0.30  P=0.484  R=0.598  F1=0.535
 
-No Escalation       0.92      0.30      0.45      2705
-   Escalation       0.31      0.92      0.46       930
-
-     accuracy                           0.46      3635
-    macro avg       0.61      0.61      0.46      3635
- weighted avg       0.76      0.46      0.45      3635
+Production model: Standard XGBoost @ threshold 0.75

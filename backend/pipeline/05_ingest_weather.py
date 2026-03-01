@@ -1,14 +1,15 @@
 """
-Step 5: Open-Meteo Weather Feature Ingestion
-Uses ERA5 reanalysis (free, no API key) to build weekly climate features per H3 hex.
+Step 5: Weather Features via Open-Meteo (free, no API key)
 
-Climate-conflict link in the Levant is well-documented:
-  - Heat stress spikes → economic/social tension
-  - Precipitation deficits (drought) → food insecurity → unrest
-  - Temperature anomaly → captures unusual conditions beyond seasonal baseline
+Downloads daily temperature and precipitation for a 0.5-degree grid covering
+the Levant bounding box, assigns each H3 hex to its nearest grid point,
+and merges heat/precip anomaly features into the training table.
 
-Strategy: query a 4x5 lat/lon grid (20 points) covering the bounding box,
-then assign each hex to its nearest grid point.
+Features added:
+  temp_max          - daily maximum temperature (°C)
+  temp_anomaly_30d  - temp_max minus 30-day rolling mean per grid point (heat spike)
+  precip_mm         - daily precipitation sum (mm)
+  precip_spike      - 1 if precip > 90th-pct for that calendar month at that location
 
 Output: data/processed/acled_h3_gdelt_firms_weather.csv
 """
@@ -18,156 +19,135 @@ import numpy as np
 import requests
 import h3
 import time
+import os
 from tqdm import tqdm
 
 # ── Config ────────────────────────────────────────────────────────────────────
-IN_PATH  = "data/processed/acled_h3_gdelt_firms.csv"
-OUT_PATH = "data/processed/acled_h3_gdelt_firms_weather.csv"
-
-H3_RESOLUTION = 6
+IN_PATH   = "data/processed/acled_h3_gdelt_firms.csv"
+OUT_PATH  = "data/processed/acled_h3_gdelt_firms_weather.csv"
+CACHE_DIR = "data/raw/weather_cache"
+os.makedirs(CACHE_DIR, exist_ok=True)
 
 # Levant bounding box
 LAT_MIN, LAT_MAX = 29.5, 37.5
 LON_MIN, LON_MAX = 33.5, 42.5
+GRID_STEP = 0.5   # degrees
 
-# 4x5 grid = 20 ERA5 query points covering the region
-GRID_LATS = np.linspace(30.0, 37.0, 4)   # 30, 32.3, 34.7, 37
-GRID_LONS = np.linspace(34.0, 42.0, 5)   # 34, 36, 38, 40, 42
+START_DATE = "2020-01-01"
+END_DATE   = "2024-12-10"
 
-# Open-Meteo API (free, no key, ERA5 historical archive)
 OPEN_METEO_URL = "https://archive-api.open-meteo.com/v1/archive"
 
-# ── Load base table ───────────────────────────────────────────────────────────
-print(f"Loading {IN_PATH}...")
-df = pd.read_csv(IN_PATH, parse_dates=["week"])
-df = df.sort_values(["h3_id", "week"]).reset_index(drop=True)
-print(f"  {len(df):,} hex-week rows")
+# ── Generate 0.5° grid ────────────────────────────────────────────────────────
+lats = np.round(np.arange(LAT_MIN, LAT_MAX + GRID_STEP, GRID_STEP), 2)
+lons = np.round(np.arange(LON_MIN, LON_MAX + GRID_STEP, GRID_STEP), 2)
+grid_points = [(la, lo) for la in lats for lo in lons]
+print(f"Weather grid: {len(grid_points)} points at {GRID_STEP}° resolution")
 
-start_date = df["week"].min().strftime("%Y-%m-%d")
-end_date   = (df["week"].max() + pd.Timedelta(weeks=1)).strftime("%Y-%m-%d")
-print(f"  Date range: {start_date} to {end_date}")
+# ── Download weather per grid point (with caching) ────────────────────────────
+def fetch_weather(lat, lon):
+    cache_file = os.path.join(CACHE_DIR, f"{lat}_{lon}.csv")
+    if os.path.exists(cache_file):
+        return pd.read_csv(cache_file, parse_dates=["date"])
+    params = {
+        "latitude":   lat,
+        "longitude":  lon,
+        "start_date": START_DATE,
+        "end_date":   END_DATE,
+        "daily":      "temperature_2m_max,temperature_2m_mean,precipitation_sum",
+        "timezone":   "GMT",
+    }
+    for attempt in range(5):
+        try:
+            r = requests.get(OPEN_METEO_URL, params=params, timeout=30)
+            r.raise_for_status()
+            data = r.json().get("daily", {})
+            if not data:
+                return None
+            df_w = pd.DataFrame({
+                "date":      pd.to_datetime(data["time"]),
+                "temp_max":  data["temperature_2m_max"],
+                "temp_mean": data["temperature_2m_mean"],
+                "precip_mm": data["precipitation_sum"],
+            })
+            df_w["grid_lat"] = lat
+            df_w["grid_lon"] = lon
+            df_w.to_csv(cache_file, index=False)
+            return df_w
+        except Exception as e:
+            if attempt == 4:
+                print(f"  ✗ failed ({lat},{lon}): {e}")
+                return None
+            time.sleep(2 ** attempt)
 
-# ── Build grid of weather query points ────────────────────────────────────────
-grid_points = [(lat, lon) for lat in GRID_LATS for lon in GRID_LONS]
-print(f"\nQuerying Open-Meteo ERA5 for {len(grid_points)} grid points...")
-
-def fetch_weather(lat, lon, start, end):
-    """Fetch daily ERA5 weather for a single point, splitting into yearly chunks to avoid timeouts."""
-    all_chunks = []
-    years = pd.date_range(start=start, end=end, freq="YS")
-    dates = [d.strftime("%Y-%m-%d") for d in years] + [end]
-
-    for i in range(len(dates) - 1):
-        params = {
-            "latitude":   round(lat, 2),
-            "longitude":  round(lon, 2),
-            "start_date": dates[i],
-            "end_date":   dates[i + 1],
-            "daily": "temperature_2m_max,temperature_2m_min,precipitation_sum",
-            "timezone": "UTC",
-        }
-        for attempt in range(4):
-            try:
-                time.sleep(0.8 + attempt * 1.5)
-                r = requests.get(OPEN_METEO_URL, params=params, timeout=30)
-                if r.status_code == 200:
-                    data = r.json()
-                    if "daily" not in data:
-                        break
-                    daily = data["daily"]
-                    chunk = pd.DataFrame({
-                        "date":     pd.to_datetime(daily["time"]),
-                        "temp_max": daily["temperature_2m_max"],
-                        "temp_min": daily["temperature_2m_min"],
-                        "precip":   daily["precipitation_sum"],
-                        "grid_lat": lat,
-                        "grid_lon": lon,
-                    })
-                    all_chunks.append(chunk)
-                    break
-            except Exception:
-                pass
-
-    if all_chunks:
-        return pd.concat(all_chunks, ignore_index=True)
-    print(f"  Warning: failed ({lat:.1f}, {lon:.1f})")
-    return pd.DataFrame()
-
+print("Downloading weather data (cached after first run)...")
 all_weather = []
-for lat, lon in tqdm(grid_points, desc="  ERA5 download"):
-    w = fetch_weather(lat, lon, start_date, end_date)
-    if not w.empty:
-        all_weather.append(w)
+for lat, lon in tqdm(grid_points):
+    df_w = fetch_weather(lat, lon)
+    if df_w is not None:
+        all_weather.append(df_w)
+    time.sleep(0.06)   # polite rate limiting
 
-weather_daily = pd.concat(all_weather, ignore_index=True)
-print(f"  Total daily records: {len(weather_daily):,}")
+weather = pd.concat(all_weather, ignore_index=True)
+print(f"  Downloaded: {len(weather):,} daily grid-point records")
 
-# ── Compute climate anomalies ─────────────────────────────────────────────────
-print("Computing temperature and precipitation anomalies...")
+# ── Compute anomalies ─────────────────────────────────────────────────────────
+print("Computing anomalies...")
+weather = weather.sort_values(["grid_lat", "grid_lon", "date"])
 
-weather_daily["month"] = weather_daily["date"].dt.month
+# 30-day rolling mean temperature anomaly (heat spike signal)
+weather["temp_roll30"] = (
+    weather.groupby(["grid_lat", "grid_lon"])["temp_max"]
+    .transform(lambda x: x.rolling(30, min_periods=7).mean())
+)
+weather["temp_anomaly_30d"] = (weather["temp_max"] - weather["temp_roll30"]).fillna(0)
 
-# Monthly baseline per grid point (multi-year average for same calendar month)
-monthly_baseline = weather_daily.groupby(["grid_lat", "grid_lon", "month"]).agg(
-    baseline_temp  = ("temp_max", "mean"),
-    baseline_precip = ("precip", "mean"),
-    p20_precip     = ("precip", lambda x: x.quantile(0.20)),  # drought threshold
-).reset_index()
+# Precip spike: > 90th percentile for that calendar month at that location
+weather["month"] = weather["date"].dt.month
+p90 = (
+    weather.groupby(["grid_lat", "grid_lon", "month"])["precip_mm"]
+    .transform(lambda x: x.quantile(0.90))
+)
+weather["precip_spike_w"] = (weather["precip_mm"] > p90).astype(int)
+weather = weather.drop(columns=["temp_roll30", "month"])
+weather = weather.rename(columns={"precip_spike_w": "precip_spike"})
 
-weather_daily = weather_daily.merge(monthly_baseline, on=["grid_lat", "grid_lon", "month"], how="left")
-weather_daily["temp_anomaly"]  = weather_daily["temp_max"]  - weather_daily["baseline_temp"]
-weather_daily["precip_anomaly"] = weather_daily["precip"] - weather_daily["baseline_precip"]
-weather_daily["drought_day"]   = (weather_daily["precip"] <= weather_daily["p20_precip"]).astype(int)
+# ── Load training table ────────────────────────────────────────────────────────
+print(f"\nLoading {IN_PATH}...")
+df = pd.read_csv(IN_PATH, parse_dates=["event_date"], low_memory=False)
+print(f"  {len(df):,} rows  |  {df['h3_id'].nunique():,} hexes")
 
-# ── Weekly aggregation per grid point ─────────────────────────────────────────
-print("Aggregating to weekly per grid point...")
-
-weather_daily["week"] = weather_daily["date"].dt.to_period("W").dt.start_time
-
-weather_weekly = weather_daily.groupby(["grid_lat", "grid_lon", "week"]).agg(
-    weather_temp_max       = ("temp_max",       "max"),
-    weather_temp_mean      = ("temp_max",       "mean"),
-    weather_temp_anomaly   = ("temp_anomaly",   "mean"),   # positive = hotter than usual
-    weather_precip_sum     = ("precip",         "sum"),
-    weather_precip_anomaly = ("precip_anomaly", "sum"),
-    weather_drought_days   = ("drought_day",    "sum"),    # 0-7 drought days in week
-).reset_index()
-
-# ── Assign each hex to nearest grid point ─────────────────────────────────────
-print("Assigning hexes to nearest grid point...")
-
+# ── Map each hex to nearest grid point ────────────────────────────────────────
+print("Mapping hexes to nearest weather grid point...")
 unique_hexes = df["h3_id"].unique()
+grid_arr = np.array(grid_points)
 
-def nearest_grid(h3_id):
-    lat, lon = h3.cell_to_latlng(h3_id)
-    dists = [(abs(lat - glat) + abs(lon - glon), glat, glon)
-             for glat, glon in grid_points]
-    _, best_lat, best_lon = min(dists)
-    return best_lat, best_lon
+hex_grid_rows = []
+for hx in unique_hexes:
+    hlat, hlon = h3.cell_to_latlng(hx)
+    dists = (grid_arr[:, 0] - hlat) ** 2 + (grid_arr[:, 1] - hlon) ** 2
+    best  = grid_points[int(np.argmin(dists))]
+    hex_grid_rows.append({"h3_id": hx, "grid_lat": best[0], "grid_lon": best[1]})
 
-hex_to_grid = {}
-for hid in tqdm(unique_hexes, desc="  Hex->grid mapping"):
-    hex_to_grid[hid] = nearest_grid(hid)
+hex_grid_df = pd.DataFrame(hex_grid_rows)
 
-df["grid_lat"] = df["h3_id"].map(lambda h: hex_to_grid[h][0])
-df["grid_lon"] = df["h3_id"].map(lambda h: hex_to_grid[h][1])
-
-# ── Merge weather into hex-week table ─────────────────────────────────────────
+# ── Merge ──────────────────────────────────────────────────────────────────────
 print("Merging weather features...")
+weather_slim = weather[["grid_lat", "grid_lon", "date",
+                         "temp_max", "temp_anomaly_30d",
+                         "precip_mm", "precip_spike"]].rename(columns={"date": "event_date"})
 
-merged = df.merge(weather_weekly, on=["grid_lat", "grid_lon", "week"], how="left")
+df = df.merge(hex_grid_df, on="h3_id", how="left")
+df = df.merge(weather_slim, on=["grid_lat", "grid_lon", "event_date"], how="left")
+df = df.drop(columns=["grid_lat", "grid_lon"])
 
-weather_cols = ["weather_temp_max", "weather_temp_mean", "weather_temp_anomaly",
-                "weather_precip_sum", "weather_precip_anomaly", "weather_drought_days"]
-merged[weather_cols] = merged[weather_cols].ffill().fillna(0)
+fill_rate = (df["temp_max"].notna() & (df["temp_max"] != 0)).mean()
+for col in ["temp_max", "temp_anomaly_30d", "precip_mm", "precip_spike"]:
+    df[col] = df[col].fillna(0)
 
-coverage = merged["weather_temp_max"].notna().mean()
-print(f"  Weather coverage: {coverage:.1%} of hex-weeks have data")
-
-# Drop intermediate grid columns
-merged = merged.drop(columns=["grid_lat", "grid_lon"])
+print(f"  Weather fill rate: {fill_rate*100:.1f}%")
 
 # ── Save ──────────────────────────────────────────────────────────────────────
-merged.to_csv(OUT_PATH, index=False)
-print(f"\nSaved {len(merged):,} rows to {OUT_PATH}")
-print(f"New features: {weather_cols}")
+df.to_csv(OUT_PATH, index=False)
+print(f"\nSaved {len(df):,} rows to {OUT_PATH}")
+print("New features: temp_max, temp_anomaly_30d, precip_mm, precip_spike")
