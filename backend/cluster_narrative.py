@@ -175,21 +175,49 @@ def generate_cluster_narrative(
         trigger_block = "No immediate sensor triggers, but historical conflict patterns are elevated."
 
     date_context = f" on {date}" if date else ""
+    is_backtest = bool(date)
+
+    # Map tier to human-readable danger description
+    tier_desc = {
+        "RED": "HIGH RISK — active conflict zone",
+        "ORANGE": "ELEVATED RISK — significant danger present",
+        "YELLOW": "MODERATE RISK — tensions detected",
+        "GREEN": "LOW RISK — currently stable",
+    }.get(tier, "UNKNOWN RISK")
+
+    if is_backtest:
+        time_instruction = (
+            f"This is a HISTORICAL ANALYSIS for {date}. "
+            f"Search for news and events that occurred AROUND {date} "
+            f"(within a few days before and after). "
+            f"Do NOT report today's current news — report what was happening at that specific point in history."
+        )
+        recency_phrase = f"around {date}"
+        currency_phrase = "was happening"
+    else:
+        time_instruction = "Search the web for the LATEST news (last 48-72 hours)."
+        recency_phrase = "in the last 48-72 hours"
+        currency_phrase = "is currently happening"
 
     prompt = f"""You are a conflict intelligence analyst briefing a civilian traveler.
+You have access to Google Search — USE IT to find relevant news.
 
-Location: cluster of {agg['hex_count']} adjacent monitoring zones centered at approximately {lat:.3f}°N, {lng:.3f}°E (Middle East / Levant region){date_context}
-Risk level: {tier} (ML model gives {agg['avg_strategic_score']:.0%} average probability of dangerous event in next 72 hours; peak hex: {agg['max_strategic_score']:.0%})
+Location: approximately {lat:.3f}°N, {lng:.3f}°E (Middle East / Levant region){date_context}
+Our system rates this area: {tier_desc}
+Cluster size: {agg['hex_count']} adjacent monitoring zones
 
-{trigger_block}
+{time_instruction}
 
-Search the web for the latest news about this specific location, then write 2-4 sentences in plain, human language that:
-1. Identify the specific area (city, district, or border region) at these coordinates
-2. Explain what the risk signals mean in context of recent events — no raw numbers or acronyms
-3. Summarize the most recent conflict developments a civilian should know about right now
-4. Note whether the danger spans a wide area ({agg['hex_count']} zones) or is localized
+IMPORTANT: Our system has classified this area as {tier}. Your job is to find NEWS that explains what is happening here. Do NOT contradict or downplay the risk level. If the area is rated RED or ORANGE, do not say it is "safe" or "low probability" — there is a reason our system flagged it.
 
-Be factual, direct, and grounded in current reporting. Do not use bullet points or headers."""
+INSTRUCTIONS:
+1. Search the web for news {recency_phrase} about conflict, violence, military operations, protests, or security incidents near these coordinates.
+2. Identify the specific area (city, district, border region).
+3. Write 3-5 sentences summarizing what {currency_phrase} based on what you found in the news. Focus on FACTS from news sources.
+4. Explain what makes (or made) this area dangerous or tense based on what you found.
+5. If the cluster spans {agg['hex_count']} zones, note whether the danger is widespread or localized.
+
+Be factual, direct, concise. No bullet points, no headers, no raw numbers. Write in plain language for a civilian."""
 
     # Call Gemini
     try:

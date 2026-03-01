@@ -38,33 +38,29 @@ export const STRATEGIC_TIER_COLORS = {
   green:  '#2ecc71',
 }
 
-// ── Continuous gradient color expression ──────────────────────────────
-// Interpolate strategic_score into a smooth danger gradient.
-// Below 0.54 = clear (transparent). Above 0.54 ramps through:
-//   0.54  light yellow
-//   0.58  yellow
-//   0.62  light orange
-//   0.66  orange
-//   0.70  red-orange
-//   0.74  red
-//   0.78+ dark red
+// ── Continuous heatmap gradient ───────────────────────────────────────
+// Smooth thermal heatmap: clear → cool yellow → warm orange → hot red
+// Score range in practice: 0.50 – 0.73
+// Below 0.54 = no risk (transparent)
+// 0.54–0.60 = low risk (cool pale yellow → warm yellow)
+// 0.60–0.66 = moderate (yellow-orange → orange)
+// 0.66–0.73+ = high risk (orange-red → deep red)
 export const STRATEGIC_COLOR_EXPRESSION = [
   'case',
   ['<', ['get', 'strategic_score'], 0.54],
-  '#1a1a2e',  // clear — invisible on dark map
+  'rgba(0,0,0,0)',  // clear — fully transparent
   [
     'interpolate',
     ['linear'],
     ['get', 'strategic_score'],
-    0.54, '#f7f7a0',   // light yellow
-    0.57, '#f6d860',   // yellow
-    0.60, '#f0b840',   // gold
-    0.63, '#f09438',   // orange
-    0.66, '#e87830',   // deep orange
-    0.69, '#e05a2c',   // red-orange
-    0.72, '#d43d2a',   // red
-    0.76, '#a81c20',   // dark red
-    0.80, '#7a0c14',   // very dark red
+    0.54, '#ffffb2',   // pale warm yellow
+    0.57, '#fed976',   // warm yellow
+    0.60, '#feb24c',   // golden yellow
+    0.63, '#fd8d3c',   // light orange
+    0.65, '#fc4e2a',   // orange-red
+    0.68, '#e31a1c',   // red
+    0.71, '#bd0026',   // deep red
+    0.74, '#800026',   // very dark red
   ],
 ]
 
@@ -76,10 +72,10 @@ export const STRATEGIC_OPACITY_EXPRESSION = [
     'interpolate',
     ['linear'],
     ['get', 'strategic_score'],
-    0.54, 0.40,
-    0.60, 0.55,
-    0.66, 0.65,
-    0.72, 0.80,
-    0.80, 0.90,
+    0.54, 0.45,
+    0.60, 0.58,
+    0.66, 0.72,
+    0.72, 0.85,
+    0.80, 0.92,
   ],
 ]

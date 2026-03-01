@@ -67,11 +67,12 @@ export function sheltersToGeoJSON(shelters) {
 
 /**
  * Add shelter layers to a Mapbox map instance.
+ * Uses hospital cross icon rendered via SDF for crisp display.
  * Call once after map loads; control visibility via setLayoutProperty.
  */
 export function addShelterLayers(map) {
   const SOURCE_ID = 'shelter-source'
-  const CIRCLE_LAYER = 'shelter-circles'
+  const ICON_LAYER = 'shelter-icons'
   const LABEL_LAYER = 'shelter-labels'
 
   // Source
@@ -82,25 +83,51 @@ export function addShelterLayers(map) {
     })
   }
 
-  // Circle layer
-  if (!map.getLayer(CIRCLE_LAYER)) {
+  // Load custom hospital cross icon (rendered as canvas → image)
+  if (!map.hasImage('hospital-cross')) {
+    const size = 40
+    const canvas = document.createElement('canvas')
+    canvas.width = size
+    canvas.height = size
+    const ctx = canvas.getContext('2d')
+
+    // White circle background
+    ctx.beginPath()
+    ctx.arc(size / 2, size / 2, size / 2 - 1, 0, Math.PI * 2)
+    ctx.fillStyle = '#ffffff'
+    ctx.fill()
+    ctx.strokeStyle = '#cc3333'
+    ctx.lineWidth = 2
+    ctx.stroke()
+
+    // Red cross
+    const cx = size / 2, cy = size / 2
+    const arm = 6, half = 3
+    ctx.fillStyle = '#cc3333'
+    ctx.fillRect(cx - half, cy - arm, half * 2, arm * 2) // vertical
+    ctx.fillRect(cx - arm, cy - half, arm * 2, half * 2) // horizontal
+
+    map.addImage('hospital-cross', { width: size, height: size, data: ctx.getImageData(0, 0, size, size).data })
+  }
+
+  // Icon layer (hospital cross markers)
+  if (!map.getLayer(ICON_LAYER)) {
     map.addLayer({
-      id: CIRCLE_LAYER,
-      type: 'circle',
+      id: ICON_LAYER,
+      type: 'symbol',
       source: SOURCE_ID,
-      paint: {
-        'circle-radius': [
+      layout: {
+        'icon-image': 'hospital-cross',
+        'icon-size': [
           'interpolate', ['linear'], ['zoom'],
-          5, 4,
-          8, 7,
-          12, 10,
+          5, 0.4,
+          8, 0.6,
+          12, 0.8,
         ],
-        'circle-color': ['get', 'color'],
-        'circle-stroke-color': '#ffffff',
-        'circle-stroke-width': 1.5,
-        'circle-opacity': 0.9,
+        'icon-allow-overlap': true,
+        'icon-ignore-placement': false,
+        visibility: 'none',
       },
-      layout: { visibility: 'none' },
     })
   }
 
@@ -127,7 +154,7 @@ export function addShelterLayers(map) {
     })
   }
 
-  return { SOURCE_ID, CIRCLE_LAYER, LABEL_LAYER }
+  return { SOURCE_ID, CIRCLE_LAYER: ICON_LAYER, LABEL_LAYER }
 }
 
 /**

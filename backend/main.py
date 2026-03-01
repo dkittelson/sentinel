@@ -308,14 +308,22 @@ def get_area_summary(
             "scored_at": None,
         }
 
-    # Aggregate stats
-    tier_counts = {"DANGER": 0, "WARNING": 0, "WATCH": 0, "CLEAR": 0}
+    # Aggregate stats using STRATEGIC scores (matches the heatmap the user sees)
+    # Recompute strategic tier from score using same thresholds as frontend
+    strategic_tiers = {"RED": 0, "ORANGE": 0, "YELLOW": 0, "GREEN": 0}
     all_triggers = []
     latest_scored_at = None
 
     for s in scores:
-        tier = s.get("tactical_tier", "CLEAR")
-        tier_counts[tier] = tier_counts.get(tier, 0) + 1
+        sc = s.get("strategic_score", 0) or 0
+        if sc >= 0.70:
+            strategic_tiers["RED"] += 1
+        elif sc >= 0.63:
+            strategic_tiers["ORANGE"] += 1
+        elif sc >= 0.54:
+            strategic_tiers["YELLOW"] += 1
+        else:
+            strategic_tiers["GREEN"] += 1
         if s.get("tactical_triggers"):
             all_triggers.extend(s["tactical_triggers"].split(" | "))
         if s.get("scored_at") and (not latest_scored_at or s["scored_at"] > latest_scored_at):
@@ -326,50 +334,75 @@ def get_area_summary(
     trigger_counts = Counter(t.strip() for t in all_triggers if t.strip())
     top_triggers = [t for t, _ in trigger_counts.most_common(5)]
 
-    avg_tactical = sum(s.get("tactical_score", 0) for s in scores) / len(scores)
     avg_strategic = sum(s.get("strategic_score", 0) for s in scores) / len(scores)
+    max_strategic = max((s.get("strategic_score", 0) for s in scores), default=0)
 
-    # Build Gemini prompt
+    # Build Gemini prompt — combines ML data with live web search for grounding
+    # Gemini will search the web (news, X/Twitter, etc.) and cite sources
     prompt = f"""You are a conflict intelligence analyst providing a situational briefing for aid workers and civilians.
+You have access to Google Search. SEARCH for the latest news, social media posts (X/Twitter, Instagram), and reports about conflict, violence, military operations, and security incidents in this region.
 
-Area: Levant region (Lebanon / northern Israel / southern Syria)
-Hexes monitored in current map view: {len(scores)}
+AREA: Levant corridor — approximate center {lat:.1f}°N, {lon:.1f}°E (covers Lebanon, Israel, Syria, and broader Middle East)
 
-Risk distribution:
-- DANGER (immediate risk): {tier_counts['DANGER']} hexes
-- WARNING (elevated risk): {tier_counts['WARNING']} hexes
-- WATCH (moderate risk):   {tier_counts['WATCH']} hexes
-- CLEAR (low risk):        {tier_counts['CLEAR']} hexes
+OUR ML MODEL'S 72-HOUR RISK FORECAST for this map view ({len(scores)} hexes monitored):
+- RED (high risk, score ≥ 0.70): {strategic_tiers['RED']} hexes
+- ORANGE (elevated risk, score 0.63-0.70): {strategic_tiers['ORANGE']} hexes
+- YELLOW (moderate risk, score 0.54-0.63): {strategic_tiers['YELLOW']} hexes
+- GREEN/CLEAR (low risk, score < 0.54): {strategic_tiers['GREEN']} hexes
+- Average danger probability: {avg_strategic:.3f} | Peak: {max_strategic:.3f}
 
-Average tactical score: {avg_tactical:.2f}/1.0
-Average ML escalation probability: {avg_strategic:.2f}/1.0
-
-Most common active signals in this area:
+ACTIVE SIGNALS FROM OUR SENSORS:
 {chr(10).join(f'- {t}' for t in top_triggers) if top_triggers else '- No significant signals'}
 
-Write a 3-4 sentence conflict briefing for this area. Be factual, calm, and specific about the nature of risks detected.
-Do not name specific towns. Do not speculate beyond the data. Use plain language suitable for civilians.
-End with one practical sentence of general guidance."""
+INSTRUCTIONS:
+1. Search for the LATEST news (last 48 hours) about conflict, violence, airstrikes, shelling, protests, or military movements in this region.
+2. Write a 4-5 sentence briefing that COMBINES our ML risk data above with what you find from current news/social media.
+3. Explain WHY certain areas might be RED or ORANGE — connect the ML scores to real events you find.
+4. At the end, add a "Sources:" section listing 2-4 of the most relevant articles/posts you found, each on its own line with the outlet name and title.
+5. Be factual and calm. Use plain language for civilians. Do NOT say the area is safe or low-risk if RED or ORANGE hexes are present."""
 
     briefing = "Conflict intelligence data aggregated. Gemini API unavailable."
+    citations = []
     try:
         from google import genai as _genai
+        import google.genai.types as _types
         gemini_key = os.getenv("GEMINI_API_KEY")
         if gemini_key:
             gclient = _genai.Client(api_key=gemini_key)
             response = gclient.models.generate_content(
-                model="gemini-2.0-flash",
+                model="gemini-2.5-flash",
                 contents=prompt,
+                config=_types.GenerateContentConfig(
+                    tools=[_types.Tool(google_search=_types.GoogleSearch())],
+                    thinking_config=_types.ThinkingConfig(thinking_budget=1024),
+                ),
             )
             briefing = response.text.strip()
+
+            # Extract grounding citations from response metadata
+            cands = response.candidates
+            if cands and cands[0].grounding_metadata:
+                gm = cands[0].grounding_metadata
+                if gm.grounding_chunks:
+                    seen_domains = set()
+                    for chunk in gm.grounding_chunks:
+                        if chunk.web and chunk.web.uri:
+                            domain = chunk.web.title or chunk.web.uri
+                            if domain not in seen_domains:
+                                seen_domains.add(domain)
+                                citations.append({
+                                    "title": chunk.web.title or "Source",
+                                    "url": chunk.web.uri,
+                                })
     except Exception as e:
         print(f"[area-summary] Gemini failed: {e}")
 
     return {
         "briefing": briefing,
         "hex_count": len(scores),
-        "tier_counts": tier_counts,
+        "tier_counts": strategic_tiers,
         "top_triggers": top_triggers,
+        "citations": citations,
         "scored_at": latest_scored_at,
     }
 

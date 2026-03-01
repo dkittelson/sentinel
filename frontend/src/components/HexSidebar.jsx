@@ -1,6 +1,4 @@
 import { useState, useEffect } from 'react'
-import { AlertBadge } from './AlertBadge'
-import { STRATEGIC_TIER_COLORS, TIER_COLORS } from '../utils/tierColors'
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
 
@@ -53,34 +51,10 @@ export function HexSidebar({ h3Id, onClose, backtestDate }) {
         <p style={styles.muted}>No data for this hex.</p>
       ) : (
         <>
-          {/* Header */}
-          <div style={styles.header}>
-            <AlertBadge tier={data.tactical_tier || 'CLEAR'} />
-            <span style={styles.hexId}>{h3Id.slice(0, 12)}…</span>
-          </div>
-
-          {/* Gemini alert text */}
-          {data.alert_text && (
-            <div style={{ ...styles.alertBox, borderColor: TIER_COLORS.DANGER }}>
-              <p style={styles.alertText}>{data.alert_text}</p>
-            </div>
-          )}
-
-          {/* Tactical triggers */}
-          {data.tactical_triggers && (
-            <div style={styles.section}>
-              <div style={styles.label}>Active triggers</div>
-              {data.tactical_triggers.split(' | ').map((trig, i) => (
-                <div key={i} style={styles.trigger}>• {trig}</div>
-              ))}
-            </div>
-          )}
-
           {/* LLM narrative with real news */}
           <div style={styles.section}>
             <div style={styles.label}>
               Intelligence Summary
-              <span style={{ color: '#3a7bd5', fontWeight: 500, marginLeft: 6, fontSize: 10 }}>⚡ web-grounded</span>
               {clusterIds.length > 1 && (
                 <span style={{ color: '#888', fontWeight: 400, marginLeft: 6, fontSize: 10 }}>
                   ({clusterIds.length} hexes in cluster)
@@ -100,23 +74,7 @@ export function HexSidebar({ h3Id, onClose, backtestDate }) {
             )}
           </div>
 
-          {/* Strategic score bar */}
-          <div style={styles.section}>
-            <div style={styles.label}>
-              ML escalation probability
-              <span style={{ ...styles.tier, color: STRATEGIC_TIER_COLORS[data.strategic_tier] || '#aaa' }}>
-                {' '}{data.strategic_tier?.toUpperCase()}
-              </span>
-            </div>
-            <div style={styles.barTrack}>
-              <div style={{
-                ...styles.barFill,
-                width: `${(data.strategic_score || 0) * 100}%`,
-                backgroundColor: STRATEGIC_TIER_COLORS[data.strategic_tier] || '#555',
-              }} />
-            </div>
-            <div style={styles.barLabel}>{((data.strategic_score || 0) * 100).toFixed(0)}%</div>
-          </div>
+
 
           {data.gdelt && (
             <div style={styles.section}>

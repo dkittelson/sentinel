@@ -4,16 +4,14 @@ import 'mapbox-gl/dist/mapbox-gl.css'
 
 import { useHexData } from './hooks/useHexData'
 import { useUserLocation } from './hooks/useUserLocation'
-import { useAreaSummary } from './hooks/useAreaSummary'
 import { useBacktest } from './hooks/useBacktest'
 import { hexesToGeoJSON } from './utils/h3ToGeoJSON'
 import { STRATEGIC_COLOR_EXPRESSION, STRATEGIC_OPACITY_EXPRESSION } from './utils/tierColors'
 import { HexSidebar } from './components/HexSidebar'
-import { NewsSidebar } from './components/NewsSidebar'
 import { LaunchPage } from './components/LaunchPage'
 import { BacktestSlider } from './components/BacktestSlider'
 import { EvacRoute, useEvacRoute } from './components/EvacRoute'
-import { useShelters, sheltersToGeoJSON, addShelterLayers, ShelterToggleButton } from './components/ShelterLayer'
+import { useShelters, sheltersToGeoJSON, addShelterLayers } from './components/ShelterLayer'
 
 mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN
 
@@ -45,10 +43,10 @@ export default function App() {
   const [mapReady, setMapReady]       = useState(false)
   const [selectedHex, setSelectedHex] = useState(null)
   const [mapBounds, setMapBounds]     = useState(null)
+  const [menuOpen, setMenuOpen]       = useState(false)
 
   const { location } = useUserLocation()
   const { hexes: liveHexes, loading: hexLoading }     = useHexData()
-  const { summary, loading: summaryLoading } = useAreaSummary(mapBounds)
   const backtest = useBacktest()
   const evac = useEvacRoute()
   const shelters = useShelters()
@@ -235,7 +233,11 @@ export default function App() {
           <>
             {/* Status bar */}
             <div style={styles.statusBar}>
-              <span style={styles.brand}>SENTINEL</span>
+              <svg width="22" height="22" viewBox="0 0 52 52" fill="none" style={{ flexShrink: 0 }}>
+                <polygon points="26,2 50,14 50,38 26,50 2,38 2,14" stroke="#ffffff" strokeWidth="2" fill="none" />
+                <polygon points="26,10 42,18 42,34 26,42 10,34 10,18" stroke="#ffffff" strokeWidth="1.2" fill="rgba(255,255,255,0.06)" />
+                <circle cx="26" cy="26" r="4" fill="#ffffff" />
+              </svg>
               {isLoading ? (
                 <span style={styles.muted}>Connecting…</span>
               ) : (
@@ -255,51 +257,83 @@ export default function App() {
                       {warningCount} WARNING
                     </span>
                   )}
-                  <span style={styles.muted}>
-                    {hexes.length} hexes · {backtest.active ? backtest.currentDate : 'live'}
-                  </span>
-                  {!backtest.active && (
-                    <button
-                      onClick={() => backtest.enter()}
-                      style={styles.backtestBtn}
-                    >
-                      ⏪ BACKTEST
-                    </button>
-                  )}
+                  <span style={styles.liveDot}>●</span>
+                  <span style={styles.liveText}>{backtest.active ? backtest.currentDate : 'live'}</span>
+                  <span style={styles.legendSep}>│</span>
+                  <span style={styles.legendItem}><span style={{ ...styles.legendSwatch, background: '#800026' }} />High</span>
+                  <span style={styles.legendItem}><span style={{ ...styles.legendSwatch, background: '#fd8d3c' }} />Moderate</span>
+                  <span style={styles.legendItem}><span style={{ ...styles.legendSwatch, background: '#ffffb2' }} />Low</span>
                 </>
               )}
             </div>
 
-            {/* Toolbar: bottom-left buttons */}
-            <div style={styles.toolbar}>
-              <ShelterToggleButton visible={shelters.visible} onToggle={shelters.toggle} />
+            {/* Menu button */}
+            <div style={styles.menuContainer}>
+              {menuOpen && (
+                <div style={styles.menuPopup}>
+                  <button
+                    onClick={() => {
+                      if (backtest.active) {
+                        backtest.exit()
+                      } else {
+                        backtest.enter('2023-10-01')
+                      }
+                      setMenuOpen(false)
+                    }}
+                    style={{
+                      ...styles.menuItem,
+                      color: backtest.active ? '#8e44ad' : '#ccc',
+                    }}
+                  >
+                    <svg style={styles.menuSvg} viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-4.45"/></svg>
+                    {backtest.active ? 'Exit Backtest' : 'Backtest Mode'}
+                  </button>
+                  <button
+                    onClick={() => {
+                      shelters.toggle()
+                      setMenuOpen(false)
+                    }}
+                    style={{
+                      ...styles.menuItem,
+                      color: shelters.visible ? '#2ecc71' : '#ccc',
+                    }}
+                  >
+                    <svg style={styles.menuSvg} viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="14" height="14" rx="2"/><line x1="10" y1="6" x2="10" y2="14"/><line x1="6" y1="10" x2="14" y2="10"/></svg>
+                    {shelters.visible ? 'Hide Hospitals' : 'Show Hospitals'}
+                  </button>
+                  <button
+                    onClick={() => {
+                      if (evac.active) {
+                        evac.deactivate()
+                      } else {
+                        evac.activate()
+                        const pos = USER_DEFAULT.current
+                        const backtestDate = backtest.active ? backtest.currentDate : null
+                        evac.fetchRoute(pos[1], pos[0], backtestDate)
+                      }
+                      setMenuOpen(false)
+                    }}
+                    style={{
+                      ...styles.menuItem,
+                      color: evac.active ? '#2ecc71' : '#ccc',
+                    }}
+                  >
+                    <svg style={styles.menuSvg} viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M3 10h4l2-6 3 12 2-6h3"/></svg>
+                    {evac.loading ? 'Routing...' : evac.active ? 'Close Evac Route' : 'Show Evac Route'}
+                  </button>
+                </div>
+              )}
               <button
-                onClick={() => {
-                  if (evac.active) {
-                    evac.deactivate()
-                  } else {
-                    evac.activate()
-                    // Route from user's blue dot position
-                    const pos = USER_DEFAULT.current // [lng, lat]
-                    const backtestDate = backtest.active ? backtest.currentDate : null
-                    evac.fetchRoute(pos[1], pos[0], backtestDate)
-                  }
-                }}
+                onClick={() => setMenuOpen(m => !m)}
                 style={{
-                  ...styles.evacBtn,
-                  borderColor: evac.active ? '#2ecc71' : '#444',
-                  color: evac.active ? '#2ecc71' : '#aaa',
-                  background: evac.active ? 'rgba(46,204,113,0.1)' : 'transparent',
+                  ...styles.menuBtn,
+                  borderColor: menuOpen ? '#e74c3c' : '#555',
+                  background: menuOpen ? 'rgba(231,76,60,0.15)' : 'rgba(10,10,20,0.85)',
                 }}
               >
-                {evac.loading ? '⏳ ROUTING...' : evac.active ? '✕ CLOSE' : '🚨 EVACUATE'}
+                <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: '100%', height: '100%' }}>{menuOpen ? '✕' : '☰'}</span>
               </button>
             </div>
-
-            {/* News sidebar (live mode only) */}
-            {!backtest.active && (
-              <NewsSidebar summary={summary} loading={summaryLoading} hidden={!!selectedHex || evac.active} />
-            )}
 
             {/* Hex detail sidebar */}
             <HexSidebar
@@ -359,12 +393,7 @@ const styles = {
     zIndex: 10,
     whiteSpace: 'nowrap',
   },
-  brand: {
-    fontWeight: 700,
-    letterSpacing: '0.12em',
-    color: '#e74c3c',
-    fontSize: 14,
-  },
+
   badge: {
     padding: '2px 8px',
     borderRadius: 4,
@@ -375,37 +404,95 @@ const styles = {
   muted: {
     color: '#666',
   },
-  backtestBtn: {
-    marginLeft: 8,
-    background: 'transparent',
-    border: '1px solid #8e44ad',
-    borderRadius: 4,
-    color: '#8e44ad',
-    fontSize: 11,
-    fontWeight: 700,
-    padding: '3px 10px',
-    cursor: 'pointer',
-    letterSpacing: '0.05em',
+  liveDot: {
+    color: '#00e676',
+    fontSize: 16,
+    lineHeight: 1,
   },
-  toolbar: {
+  liveText: {
+    color: '#00e676',
+    fontWeight: 700,
+    fontSize: 13,
+    letterSpacing: '0.06em',
+  },
+  legendSep: {
+    color: '#444',
+    fontSize: 14,
+    margin: '0 2px',
+  },
+  legendItem: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 5,
+    fontSize: 12,
+    color: '#aaa',
+    fontWeight: 600,
+  },
+  legendSwatch: {
+    display: 'inline-block',
+    width: 10,
+    height: 10,
+    borderRadius: 2,
+    border: '1px solid rgba(255,255,255,0.15)',
+  },
+  menuContainer: {
     position: 'absolute',
-    bottom: 24,
+    bottom: 40,
     left: 16,
     display: 'flex',
     flexDirection: 'column',
+    alignItems: 'flex-start',
     gap: 8,
     zIndex: 15,
   },
-  evacBtn: {
-    background: 'transparent',
-    border: '1px solid #444',
-    borderRadius: 4,
-    padding: '3px 10px',
-    fontSize: 11,
-    fontWeight: 700,
+  menuBtn: {
+    width: 42,
+    height: 42,
+    borderRadius: '50%',
+    border: '1px solid #555',
+    background: 'rgba(10, 10, 20, 0.85)',
+    color: '#ddd',
+    fontSize: 20,
     cursor: 'pointer',
-    letterSpacing: '0.04em',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backdropFilter: 'blur(6px)',
+    transition: 'all 0.2s',
+    boxShadow: '0 2px 10px rgba(0,0,0,0.4)',
     fontFamily: 'system-ui, sans-serif',
-    transition: 'all 0.15s',
+  },
+  menuPopup: {
+    background: 'rgba(10, 10, 20, 0.92)',
+    border: '1px solid #2a2a3d',
+    borderRadius: 10,
+    padding: '6px 0',
+    backdropFilter: 'blur(8px)',
+    boxShadow: '0 4px 20px rgba(0,0,0,0.5)',
+    marginBottom: 8,
+    minWidth: 180,
+  },
+  menuItem: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 10,
+    width: '100%',
+    padding: '10px 16px',
+    background: 'transparent',
+    border: 'none',
+    color: '#ccc',
+    fontSize: 13,
+    fontWeight: 600,
+    cursor: 'pointer',
+    fontFamily: 'system-ui, sans-serif',
+    letterSpacing: '0.02em',
+    transition: 'background 0.15s',
+    textAlign: 'left',
+  },
+  menuSvg: {
+    width: 18,
+    height: 18,
+    flexShrink: 0,
+    color: '#888',
   },
 }

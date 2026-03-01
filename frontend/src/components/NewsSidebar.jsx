@@ -1,5 +1,4 @@
 import { TIER_COLORS } from '../utils/tierColors'
-import { AlertBadge } from './AlertBadge'
 
 export function NewsSidebar({ summary, loading, hidden }) {
   if (hidden) return null
@@ -21,7 +20,7 @@ export function NewsSidebar({ summary, loading, hidden }) {
           {/* Situation overview */}
           <div style={styles.section}>
             <div style={styles.label}>Situation Overview</div>
-            <p style={styles.body}>{summary.briefing}</p>
+            <BriefingBody text={summary.briefing} />
           </div>
 
           {/* Threat distribution */}
@@ -29,15 +28,43 @@ export function NewsSidebar({ summary, loading, hidden }) {
             <div style={styles.section}>
               <div style={styles.label}>Threat Distribution</div>
               <div style={styles.tiers}>
-                {['DANGER', 'WARNING', 'WATCH', 'CLEAR'].map(t => (
-                  summary.tier_counts[t] > 0 && (
-                    <div key={t} style={styles.tierRow}>
-                      <AlertBadge tier={t} />
-                      <span style={styles.tierCount}>{summary.tier_counts[t]} hexes</span>
+                {[
+                  { key: 'RED', label: 'RED', color: '#e74c3c' },
+                  { key: 'ORANGE', label: 'ORANGE', color: '#f09438' },
+                  { key: 'YELLOW', label: 'YELLOW', color: '#f6d860' },
+                  { key: 'GREEN', label: 'CLEAR', color: '#4a4a5a' },
+                ].map(({ key, label, color }) => (
+                  summary.tier_counts[key] > 0 && (
+                    <div key={key} style={styles.tierRow}>
+                      <span style={{
+                        ...styles.tierBadge,
+                        background: color,
+                        color: key === 'YELLOW' ? '#222' : '#fff',
+                      }}>{label}</span>
+                      <span style={styles.tierCount}>{summary.tier_counts[key]} hexes</span>
                     </div>
                   )
                 ))}
               </div>
+            </div>
+          )}
+
+          {/* Citations from web search */}
+          {summary.citations?.length > 0 && (
+            <div style={styles.section}>
+              <div style={styles.label}>Sources</div>
+              {summary.citations.slice(0, 5).map((c, i) => (
+                <a
+                  key={i}
+                  href={c.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={styles.citation}
+                >
+                  <span style={styles.citationDot}>●</span>
+                  <span style={styles.citationText}>{c.title}</span>
+                </a>
+              ))}
             </div>
           )}
 
@@ -59,6 +86,18 @@ export function NewsSidebar({ summary, loading, hidden }) {
       )}
     </div>
   )
+}
+
+/**
+ * Render briefing text, splitting out any inline "Sources:" section
+ * so we don't double-display citations.
+ */
+function BriefingBody({ text }) {
+  if (!text) return null
+  // Strip out "Sources:" section if Gemini included it inline
+  const sourcesIdx = text.search(/\n\s*\*?\*?Sources:?\*?\*?\s*\n/i)
+  const displayText = sourcesIdx > -1 ? text.slice(0, sourcesIdx).trim() : text
+  return <p style={styles.body}>{displayText}</p>
 }
 
 function SkeletonLines() {
@@ -132,9 +171,41 @@ const styles = {
     alignItems: 'center',
     gap: 10,
   },
+  tierBadge: {
+    padding: '2px 8px',
+    borderRadius: 3,
+    fontSize: 10,
+    fontWeight: 700,
+    letterSpacing: '0.06em',
+  },
   tierCount: {
     color: '#888',
     fontSize: 12,
+  },
+  citation: {
+    display: 'flex',
+    alignItems: 'flex-start',
+    gap: 8,
+    padding: '6px 0',
+    color: '#7ab3ef',
+    textDecoration: 'none',
+    fontSize: 12,
+    lineHeight: 1.4,
+    borderBottom: '1px solid #1a1a2e',
+    transition: 'color 0.15s',
+  },
+  citationDot: {
+    color: '#4a6a8a',
+    fontSize: 8,
+    marginTop: 4,
+    flexShrink: 0,
+  },
+  citationText: {
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    display: '-webkit-box',
+    WebkitLineClamp: 2,
+    WebkitBoxOrient: 'vertical',
   },
   trigger: {
     color: '#aaa',
