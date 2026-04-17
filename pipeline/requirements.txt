@@ -1,0 +1,26 @@
+pandas
+numpy
+h3
+geopandas
+shapely
+xgboost
+scikit-learn
+requests
+gdelt
+python-dotenv
+fastapi
+uvicorn
+psycopg2-binary
+sqlalchemy
+supabase
+google-genai
+apscheduler
+tqdm
+matplotlib
+seaborn
+jupyter
+pyarrow
+# Step 8: WorldPop raster sampling
+rasterio
+# Step 13: Sentinel-1 SAR change detection (optional, needs GEE account)
+earthengine-api

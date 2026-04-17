@@ -1,12 +1,17 @@
 # Data (never commit raw data)
 data/raw/
 data/processed/
+pipeline/data/
+pipeline/ingest/data/
 *.csv
+*.tif
+*.h5
+*.hdf5
+*.parquet
 
 # Models
-models/*.pkl
-models/*.json
-models/*.ubj
+*.pkl
+*.ubj
 
 # Environment
 .env

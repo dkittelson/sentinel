@@ -1,0 +1,63 @@
+name: Levant
+description: Lebanon, Northern Israel, Southern Syria corridor
+
+# Geographic bounds (used by all ingestion scripts for API queries)
+bbox:
+  min_lat: 32.5
+  max_lat: 34.8
+  min_lon: 34.5
+  max_lon: 37.5
+
+# Spatial
+h3_resolution: 6
+countries: [Lebanon, Israel, Syria]
+
+# Timeline
+start_date: "2020-01-01"
+end_date: "2024-12-10"
+
+# Airports to monitor (OpenSky - Phase 1.6)
+airports:
+  - code: BEY
+    name: Beirut–Rafic Hariri
+  - code: TLV
+    name: Ben Gurion
+  - code: DAM
+    name: Damascus International
+
+# WFP food price markets (Phase 1.4)
+wfp_markets:
+  - name: Beirut
+    lat: 33.89
+    lon: 35.50
+  - name: Tripoli
+    lat: 34.44
+    lon: 35.83
+  - name: Sidon
+    lat: 33.56
+    lon: 35.37
+  - name: Damascus
+    lat: 33.51
+    lon: 36.29
+
+# Currency pairs for economic stress (if added later)
+currency_pairs: [LBP/USD, SYP/USD, ILS/USD]
+
+# Calendar events (Phase 1.5)
+calendar_events:
+  - name: Nakba Day
+    date: "05-15"
+  - name: Lebanon Independence Day
+    date: "11-22"
+  - name: Israel Independence Day
+    date: "04-26"
+
+# Wikipedia pages to monitor (Phase 1.12)
+wikipedia_pages:
+  - Hezbollah
+  - 2006_Lebanon_War
+  - Israeli–Lebanese_conflict
+  - Syrian_civil_war
+
+# Telegram OSINT channels (Phase 1.10)
+telegram_channels: []
