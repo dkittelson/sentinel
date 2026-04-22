@@ -1,35 +1,119 @@
-## Inspiration
+# Sentinel — Conflict Risk Intelligence for the Levant
 
-On October 7, 2023, thousands of civilians in southern Israel had no warning. In September 2024, Hezbollah pager bombs detonated across Lebanon with zero public notice. In 2025, US-Iran tensions pushed the Strait of Hormuz to the brink — oil workers, journalists, and aid organizations operating in the region had no systematic way to know where the next flashpoint would be.
+Civilians in conflict zones get nothing. Governments get intelligence briefings. Sentinel closes that gap.
 
-The pattern is always the same: conflict escalates gradually, the signals are there in the data — troop movements, news tone shifts, historical incident clusters — but no tool synthesizes them into something a civilian can act on. Governments get intelligence briefings. Civilians get nothing.
+When Hezbollah pager bombs detonated across Lebanon in September 2024, there was zero public warning. When US-Iran tensions pushed the Strait of Hormuz to the brink in 2025, oil workers and journalists had no systematic way to know where the next flashpoint would be. The signals are always in the data — the tools to read them aren't.
 
-Sentinel is our answer to that gap.
+**Sentinel scores every 36 km² hex across Lebanon, Israel, and Syria with a 7-day conflict probability, updated every 15 minutes, using only free public data.**
 
-## What it does
+---
 
-Sentinel monitors the Levant corridor (Lebanon, Israel, Syria) in real time, scoring every 36 km² hex on the map with a 7-day danger probability. It fuses 12+ live data streams through a dual-model ML system — XGBoost for detecting conflict **onset** (new violence in peaceful areas) and a GRU neural network for predicting conflict **continuation** (escalation in active zones). When you click any hex, a Gemini agent searches live news and writes a plain-language intelligence briefing grounded in real sources.
+## What It Does
 
-## How we built it
+| Feature | Description |
+|---|---|
+| Live hex map | YlOrRd heatmap, Mapbox GL JS, H3 hex grid at resolution 5 (~36 km²) |
+| Dual-model ML | XGBoost for **onset** (new violence in peaceful areas) + GRU for **continuation** (escalation in active zones) |
+| Real-time briefings | Click any hex → Gemini 2.5 Flash searches live news and writes a plain-language summary |
+| Evacuation routing | Hospital and shelter layer with AI-powered route recommendations |
+| Multi-language | English / Hebrew / Arabic with full RTL support |
+| Alert tiers | Green / Yellow / Orange / Red with rule-based tactical triggers |
 
-- **Dual ML architecture**: XGBoost (Optuna-tuned, 39 features) for onset prediction using an anomaly detection framing — z-scores detect when a hex is behaving unusually compared to its 30-day baseline. PerHexGRU (55K params, 83 features) for continuation prediction — a recurrent neural network that captures escalation sequences over 14-day windows. Onset AUC-PR: 0.246. Continuation AUC-PR: 0.739.
-- **19 ingest scripts** across 7 data domains: conflict events (ACLED), media sentiment (GDELT dynamics), satellite (FIRMS fire, VIIRS nightlights), connectivity (IODA outages), socioeconomic (LBP exchange rate, IPC food security), military/OSINT (Pikud sirens, Google Trends mobilization), and calendar context.
-- **Publication lag enforcement**: Features are shifted by their real-world availability (ACLED 3 days, GDELT 1 day) to prevent lookahead bias. This ensures the model in production sees exactly what it saw during training.
-- **Backend**: FastAPI + Supabase (PostGIS), APScheduler re-scoring every 15 minutes, two-layer alerting (strategic ML + tactical rule-based).
-- **Intelligence layer**: Gemini 2.5 Flash with Google Search grounding — the LLM searches real news, not hallucinations.
-- **Frontend**: React + Mapbox GL JS, H3 hex overlay with YlOrRd gradient heatmap, hospital shelter layer, AI-powered evacuation routing.
+---
 
-## Key discoveries
+## ML Pipeline
 
-- **Anomaly detection reframing** was the single biggest improvement. Instead of asking "will there be conflict?", we ask "how unusual is today compared to this hex's baseline?" Z-score features (deviation from 30-day rolling mean) became the #1 feature group, contributing more than population, spatial lags, or GDELT.
-- **GRU beats XGBoost for continuation by 8.7%** because it sees escalation as a *sequence* (probe → pause → larger attack → full escalation) rather than a single row of summary statistics.
-- **Most data sources are noise for onset**: Calendar features, weather, FIRMS, nightlights, food security, and Google Trends all *hurt* onset performance when added. Only z-scores, spatial lags, GDELT dynamics, population, and LBP economics help.
-- **Publication lag enforcement revealed 27% metric inflation** in our continuation model's cross-validation — a critical finding for production honesty.
+### Architecture
 
-## What's next for Sentinel
+```
+Hex is peaceful?  →  Onset XGBoost (39 features, anomaly detection framing)
+Hex is active?    →  Continuation GRU (83 features, 14-day sequence window)
+```
 
-1. **Calibrate probabilities** — make model scores meaningful (a predicted 0.7 should mean 70% chance)
-2. **Register for remaining free API keys** (OpenSky ADS-B for GNSS jamming detection, Telegram for real-time OSINT, NOTAMs for airspace closures)
-3. **GEE satellite features** (TROPOMI NO2, Sentinel-2 NDVI, Dynamic World) via Google Earth Engine
-4. **Expand beyond the Levant** — Ukraine, Sudan, Myanmar are the next priority regions
-5. **Foundation model** (post-funding) — multi-theater self-supervised pretraining with cross-modal fusion of satellite imagery, text, and tabular data
+### Current Metrics
+
+| Model | AUC-PR | vs. Baseline |
+|---|---|---|
+| Onset — XGBoost (focal loss + Optuna) | **0.246** | 11.7× (was 0.021) |
+| Continuation — PerHexGRU (55K params) | **0.739** | 1.3× (was 0.56) |
+| Continuation — XGBoost (Optuna) | 0.680 | baseline for GRU comparison |
+
+Publication lags enforced: ACLED +3 days, GDELT +1 day. Without enforcement, continuation CV was **27% inflated**.
+
+### Key Discoveries
+
+- **Anomaly detection framing was the #1 improvement.** Z-scores (how unusual is today vs. this hex's 30-day baseline?) outperform absolute values across all onset feature groups. Asking "is this weird?" beats asking "is this dangerous?"
+- **GRU beats XGBoost for continuation by 8.7%** — it sees escalation as a sequence (probe → pause → larger attack → full escalation), not a snapshot.
+- **Most data sources are noise for onset.** Ablation testing across 16 source groups pruned 74 features down to 39. Calendar features, weather, FIRMS, nightlights, and food security all *hurt* onset when added.
+- **Publication lag enforcement matters.** Without it, metrics are artificially inflated by up to 27%. This is our production honesty guarantee.
+
+### Data Sources (19 ingest scripts)
+
+| Domain | Sources |
+|---|---|
+| Conflict events | ACLED, UCDP-GED |
+| Media sentiment | GDELT dynamics (hostility, tone, velocity) |
+| Satellite | FIRMS fire, VIIRS nightlights |
+| Connectivity | IODA internet outages |
+| Socioeconomic | LBP exchange rate, IPC food security |
+| Military/OSINT | Pikud HaOref sirens, Google Trends mobilization |
+| Infrastructure | OSM hospitals/schools, WorldPop population |
+
+---
+
+## Stack
+
+- **Backend**: FastAPI + Supabase (PostGIS) + APScheduler (15-min re-scoring)
+- **Frontend**: Vite + React + Mapbox GL JS + h3-js
+- **ML**: XGBoost + PyTorch (GRU) + Optuna + SHAP
+- **Intelligence**: Gemini 2.5 Flash with Google Search grounding
+
+---
+
+## Roadmap
+
+### Free to build (no funding required)
+
+**ML**
+- [ ] **Text embedding features** — generate embeddings from ACLED event descriptions and GDELT headlines using Gemini `text-embedding-005` (free tier); feed as ~32 PCA'd features into XGBoost. Academic work shows text-only onset models reach AUC 0.83. Expected lift: onset AUC-PR 0.246 → 0.35+.
+- [ ] **Calibrated probabilities** — add Venn-ABERS calibration so model scores are statistically meaningful (0.7 should mean 70% chance). Required for the insurance/parametric trigger wedge.
+
+**Fullstack**
+- [ ] **WhatsApp / SMS civilian alerts** — opt-in phone number + hex threshold selection; push alert when score crosses. Twilio free tier + WhatsApp Business API free up to 1,000 conversations/month. Works offline on a dumbphone — critical for the Levant.
+- [ ] **Parametric insurance webhook demo** — `POST /v1/triggers`: fire a webhook when hex score > threshold for N consecutive days. Demo-able live: shows the B2B data product thesis in 30 seconds.
+
+**UX (5 features, all free)**
+1. **"Why this score?" attribution panel** — click any hex → plain-language SHAP breakdown: "45% from ACLED event 12km away, 30% from GDELT tone acceleration, 18% from nightlight anomaly." Builds trust; removes the black-box problem.
+2. **Human toll strip** — a thin, dignified band showing ACLED-verified fatalities and displacement for the past 7 days in the current map view. Grounds abstract risk scores in human stakes.
+3. **Source health drawer** — collapsible panel showing all 12 live sources with last-update timestamp and freshness badge (live / stale / offline). Answers the B2B audit question: "how do we know your data is fresh?"
+4. **Similar historical pattern match** — for any hex, surface the top-3 most similar 14-day trajectories from the historical record. E.g., "This pattern resembles southern Lebanon, July 2006." Informative and emotionally resonant.
+5. **Per-hex 30-day timeline scrub** — bottom drawer with a date slider. Scrub backwards to watch events animate in/out with inline ACLED citations. Turns the dataset into a browseable archive.
+
+### With funding (~$30K)
+
+| Use | Cost | What it unlocks |
+|---|---|---|
+| 3 paid B2B pilots | ~$12K (sales + legal templates) | Revenue validation → Series seed story |
+| Sentinel Hub Pro satellite data | ~$500/mo | Real-time satellite damage + NDVI layers in the map |
+| GPU compute budget | ~$5K | Larger embedding models, faster GRU iteration |
+| Levant domain analyst (part-time) | ~$5K | Ground-truth validation → credibility for insurance/NGO buyers |
+
+---
+
+## Business Model
+
+Three revenue wedges targeting organizations that price geopolitical risk:
+
+| Wedge | Buyers | Angle | TAM |
+|---|---|---|---|
+| Supply chain | Logistics, shipping, commodities | 70× finer resolution than competitors; 72h forward (reactive tools only react) | $3–5B SCRM market |
+| Insurance / parametric | Lloyd's syndicates, Munich Re, AIG | Automated payout triggers; removes claims investigation | $1–4B political risk + marine war |
+| Alternative data / finance | Hedge funds, Bloomberg/Refinitiv distributors | Conflict scores as trading signals; 9.05% risk-adjusted return differential (academic) | $1–2B alt-data |
+
+Comps: Recorded Future ($2.65B exit), Dataminr ($4.1B), Seerist (Verisk acquisition).
+
+---
+
+## Hackathon
+
+Built at [hackathon name], **2nd place**. VCs offered a 2-week sprint to demonstrate resourcefulness before funding.
