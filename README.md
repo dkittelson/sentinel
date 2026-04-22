@@ -14,7 +14,7 @@ When Hezbollah pager bombs detonated across Lebanon in September 2024, there was
 |---|---|
 | Live hex map | YlOrRd heatmap, Mapbox GL JS, H3 hex grid at resolution 5 (~36 km²) |
 | Dual-model ML | XGBoost for **onset** (new violence in peaceful areas) + GRU for **continuation** (escalation in active zones) |
-| Real-time briefings | Click any hex → Gemini 2.5 Flash searches live news and writes a plain-language summary |
+| Real-time briefings | Click any hex → Gemini 2.5 Flash searches live news and writes a plain-language intelligence brief |
 | Evacuation routing | Hospital and shelter layer with AI-powered route recommendations |
 | Multi-language | English / Hebrew / Arabic with full RTL support |
 | Alert tiers | Green / Yellow / Orange / Red with rule-based tactical triggers |
@@ -25,10 +25,23 @@ When Hezbollah pager bombs detonated across Lebanon in September 2024, there was
 
 ### Architecture
 
+Every hex is routed to one of two models based on its recent history:
+
 ```
-Hex is peaceful?  →  Onset XGBoost (39 features, anomaly detection framing)
-Hex is active?    →  Continuation GRU (83 features, 14-day sequence window)
+Hex is peaceful (no events in past 14 days)?
+  → Onset XGBoost: 39 features, anomaly detection framing
+    "Is something about to START here?"
+
+Hex is active (violence in past 14 days)?
+  → Continuation GRU: 83 features, 14-day sequence window
+    "Is this about to ESCALATE?"
 ```
+
+The models never run together on the same hex. It's a routing decision, not an ensemble.
+
+### Why two separate models?
+
+Onset and continuation are fundamentally different problems. Onset asks *is this hex behaving unusually?* — the signal is anomaly (z-scores vs. 30-day baseline). Continuation asks *where is this trajectory heading?* — the signal is sequence (14 days of escalation history). A single model trying to learn both gets worse at both.
 
 ### Current Metrics
 
@@ -38,14 +51,14 @@ Hex is active?    →  Continuation GRU (83 features, 14-day sequence window)
 | Continuation — PerHexGRU (55K params) | **0.739** | 1.3× (was 0.56) |
 | Continuation — XGBoost (Optuna) | 0.680 | baseline for GRU comparison |
 
-Publication lags enforced: ACLED +3 days, GDELT +1 day. Without enforcement, continuation CV was **27% inflated**.
+Publication lags enforced: ACLED +3 days, GDELT +1 day. Without enforcement, continuation CV was **27% inflated** — a critical production honesty guarantee.
 
 ### Key Discoveries
 
-- **Anomaly detection framing was the #1 improvement.** Z-scores (how unusual is today vs. this hex's 30-day baseline?) outperform absolute values across all onset feature groups. Asking "is this weird?" beats asking "is this dangerous?"
+- **Anomaly detection framing was the #1 improvement.** Z-scores (how unusual is today vs. this hex's 30-day baseline?) outperform absolute values. Asking "is this weird?" beats asking "is this dangerous?"
 - **GRU beats XGBoost for continuation by 8.7%** — it sees escalation as a sequence (probe → pause → larger attack → full escalation), not a snapshot.
 - **Most data sources are noise for onset.** Ablation testing across 16 source groups pruned 74 features down to 39. Calendar features, weather, FIRMS, nightlights, and food security all *hurt* onset when added.
-- **Publication lag enforcement matters.** Without it, metrics are artificially inflated by up to 27%. This is our production honesty guarantee.
+- **Publication lag enforcement matters.** Without it, metrics are inflated by up to 27%.
 
 ### Data Sources (19 ingest scripts)
 
@@ -72,34 +85,48 @@ Publication lags enforced: ACLED +3 days, GDELT +1 day. Without enforcement, con
 
 ## Roadmap
 
-### Free to build (no funding required)
+### Free to build — ordered by expected ROI
 
 **ML**
-- [ ] **Text embedding features** — generate embeddings from ACLED event descriptions and GDELT headlines using Gemini `text-embedding-005` (free tier); feed as ~32 PCA'd features into XGBoost. Academic work shows text-only onset models reach AUC 0.83. Expected lift: onset AUC-PR 0.246 → 0.35+.
-- [ ] **Calibrated probabilities** — add Venn-ABERS calibration so model scores are statistically meaningful (0.7 should mean 70% chance). Required for the insurance/parametric trigger wedge.
+
+1. **Global ACLED training** *(highest impact, zero cost)* — Keep the exact same XGBoost/GRU architecture. Train on ACLED data from 50+ countries instead of just the Levant. This gives 10–20× more positive examples and teaches the model universal conflict patterns (economic stress → mobilization → onset) rather than just Levant-specific ones. Expected lift: onset AUC-PR 0.246 → 0.40–0.55.
+
+2. **Text embedding features** — GDELT and ACLED descriptions are currently reduced to 6 summary numbers (tone, hostility count, etc.). We throw away 99% of the information. Instead: run ACLED event descriptions and GDELT headlines through Gemini `text-embedding-005` (free), compress to ~32 dimensions via PCA, add as new features to XGBoost. The model goes from seeing "tone=-6.2" to understanding what the text actually says. Academic work shows text-only onset models reach AUC 0.83. Expected lift: onset 0.246 → 0.35–0.50. Combined with global training: 0.55–0.70.
+
+3. **Spatial GNN for continuation** — Current spatial features are hand-crafted ring averages (ring-1, ring-2 neighbor means). A Graph Neural Network learns *which* neighbor relationships matter from data — violence along a highway corridor is more predictive than violence separated by a mountain range. PyTorch Geometric, free. Expected lift: continuation 0.739 → 0.82–0.85.
+
+4. **Calibrated probabilities** — Add Venn-ABERS calibration so model scores are statistically meaningful (0.70 should mean 70% chance). Required for the insurance/parametric trigger wedge.
 
 **Fullstack**
-- [ ] **WhatsApp / SMS civilian alerts** — opt-in phone number + hex threshold selection; push alert when score crosses. Twilio free tier + WhatsApp Business API free up to 1,000 conversations/month. Works offline on a dumbphone — critical for the Levant.
-- [ ] **Parametric insurance webhook demo** — `POST /v1/triggers`: fire a webhook when hex score > threshold for N consecutive days. Demo-able live: shows the B2B data product thesis in 30 seconds.
 
-**UX (5 features, all free)**
-1. **"Why this score?" attribution panel** — click any hex → plain-language SHAP breakdown: "45% from ACLED event 12km away, 30% from GDELT tone acceleration, 18% from nightlight anomaly." Builds trust; removes the black-box problem.
-2. **Human toll strip** — a thin, dignified band showing ACLED-verified fatalities and displacement for the past 7 days in the current map view. Grounds abstract risk scores in human stakes.
-3. **Source health drawer** — collapsible panel showing all 12 live sources with last-update timestamp and freshness badge (live / stale / offline). Answers the B2B audit question: "how do we know your data is fresh?"
-4. **Similar historical pattern match** — for any hex, surface the top-3 most similar 14-day trajectories from the historical record. E.g., "This pattern resembles southern Lebanon, July 2006." Informative and emotionally resonant.
-5. **Per-hex 30-day timeline scrub** — bottom drawer with a date slider. Scrub backwards to watch events animate in/out with inline ACLED citations. Turns the dataset into a browseable archive.
+- [ ] **WhatsApp / SMS civilian alerts** — opt-in phone + hex threshold; alert when score crosses. Twilio free tier + WhatsApp Business API free up to 1,000 conversations/month.
+- [ ] **Parametric insurance webhook** — `POST /v1/triggers`: fire a webhook when hex score > threshold for N consecutive days. Live demo of the B2B thesis.
 
-### With funding (~$30K)
+**UX (5 features, all free to build)**
 
-All features above can be built and demoed free. Funding covers scale and the one visual upgrade that changes how the product looks:
+1. **"Why this score?" attribution panel** — click any hex → plain-language SHAP breakdown of the top 3 drivers. Removes the black-box problem.
+2. **Human toll strip** — a thin, dignified band showing verified fatalities and displacement for hexes in the current map view. Grounds abstract risk scores in human stakes.
+3. **Source health drawer** — shows all 12 live sources with last-update timestamps and freshness badges. Answers the question: "how do we know this data is current?"
+4. **Similar historical pattern match** — surface the top-3 most similar 14-day trajectories from history. *"This pattern resembles southern Lebanon, July 2006."*
+5. **Per-hex 30-day timeline scrub** — date slider that animates events in/out. Turns the dataset into a browseable archive.
 
-| Use | Cost | What it unlocks |
+### With funding
+
+The ML pipeline improves for free. Funding covers three things: product presentation, hosting at scale, and customer acquisition.
+
+| Item | Cost | Why it matters |
 |---|---|---|
-| **6 months product infra** | ~$2,500 | Always-on backend, Supabase Pro, Mapbox paid tier — no more free-tier sleep restarts |
-| **Sentinel Hub Pro** | ~$1,200 (6 mo) | Satellite imagery map tiles: users see actual terrain + burn scars at 10m resolution, not just colored hexes |
-| **Outreach to 10 security consulting firms** | ~$3K (travel + legal templates) | First paying customer → validation before larger enterprise buyers |
-| **GPU compute** | ~$3K | Larger text embedding models, faster GRU iteration |
-| **Levant domain analyst (part-time)** | ~$5K | Ground-truth validation → credibility with journalists and consulting buyers |
+| **Sentinel Hub Exploration** | $195/month | Swaps the base map from OpenStreetMap tiles to actual Sentinel-2 satellite imagery (10m resolution). Users see real terrain, burn scars, destroyed neighborhoods — not just colored hexes. This is entirely a product presentation upgrade; the ML doesn't need it. |
+| **Supabase Pro** | $25/month | Free tier caps at 500MB and 50 concurrent connections. Needed when real users arrive. |
+| **Backend hosting (Railway)** | $20/month | Free-tier backends sleep after inactivity. Always-on needed for production. |
+| **Mapbox paid tier** | $50–200/month | Free tier caps at 50,000 map loads/month (~1,600 users/day). Costs scale with usage. |
+| **Gemini API at user scale** | $50–100/month | Free tier allows ~500 hex briefings/day. At real usage, this becomes a cost. |
+| **Twilio (SMS/WhatsApp at scale)** | $50/month | Free trial covers the demo. Production alerts cost ~$0.008/message. |
+| **B2B outreach** | $3,000 one-time | Legal templates for data licensing agreements + 10 consulting firm meetings. |
+| **GPU compute (contrastive pretraining)** | $3,000–5,000 one-time | After free-data ML is exhausted: train a small conflict-domain foundation model from scratch on global ACLED history. This creates a technical moat. |
+| **Levant domain analyst** | $5,000 one-time | Part-time regional expert for ground-truth validation. Critical for journalist and consulting firm credibility. |
+
+**6-month total at real product scale: ~$15,000–20,000**
 
 ---
 
