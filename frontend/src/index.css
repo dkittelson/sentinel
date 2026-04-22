@@ -6,3 +6,35 @@ body {
   overflow: hidden;
   background: #0a0a14;
 }
+
+/* Focus rings — visible for keyboard nav, suppressed for mouse */
+:focus-visible {
+  outline: 2px solid #2ecc71;
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+:focus:not(:focus-visible) {
+  outline: none;
+}
+
+/* Shimmer animation for skeleton loaders */
+@keyframes shimmer {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* Bounce for onboarding arrow */
+@keyframes bounce {
+  from { transform: translateY(0); }
+  to   { transform: translateY(6px); }
+}
+
+/* prefers-reduced-motion: kill all CSS animations/transitions */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration:       0.01ms !important;
+    animation-iteration-count: 1     !important;
+    transition-duration:      0.01ms !important;
+    scroll-behavior:          auto   !important;
+  }
+}

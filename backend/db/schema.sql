@@ -97,3 +97,18 @@ as $$
   )
   order by distance_m;
 $$;
+
+-- ── Risk score history (append-only, one row per hex per scoring run) ─────────
+-- Enables the per-hex 14-day sparkline in the sidebar.
+-- The risk_scores table keeps only the latest score (upsert pattern).
+-- This table accumulates history starting from the first run after migration.
+create table if not exists risk_scores_history (
+  id              bigserial primary key,
+  h3_id           text references hex_grid(h3_id),
+  strategic_score float,
+  strategic_tier  text,
+  scored_at       timestamptz default now()
+);
+
+create index if not exists rsh_h3_time_idx
+  on risk_scores_history(h3_id, scored_at desc);

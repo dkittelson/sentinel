@@ -8,29 +8,28 @@ Sentinel is our answer to that gap.
 
 ## What it does
 
-Sentinel monitors the Levant corridor (Lebanon, Israel, Syria) in real time, scoring every 36 km² hex on the map with a 72-hour danger probability. It fuses three live data streams — ACLED conflict events, NASA FIRMS thermal anomalies, and GDELT global news sentiment — through a trained XGBoost model. When you click any hex, a Gemini agent searches live news and writes a plain-language intelligence briefing grounded in real sources. A backtest mode lets you replay history — watch the heatmap light up in the days before October 7.
+Sentinel monitors the Levant corridor (Lebanon, Israel, Syria) in real time, scoring every 36 km² hex on the map with a 7-day danger probability. It fuses 12+ live data streams through a dual-model ML system — XGBoost for detecting conflict **onset** (new violence in peaceful areas) and a GRU neural network for predicting conflict **continuation** (escalation in active zones). When you click any hex, a Gemini agent searches live news and writes a plain-language intelligence briefing grounded in real sources.
 
 ## How we built it
 
-- **ML pipeline**: 8.5 million hex-day training samples, XGBoost with focal loss, 44 features including spatial lag from H3 ring-1 neighbors, temporal lags, and actor novelty signals. ROC-AUC 0.873.
+- **Dual ML architecture**: XGBoost (Optuna-tuned, 39 features) for onset prediction using an anomaly detection framing — z-scores detect when a hex is behaving unusually compared to its 30-day baseline. PerHexGRU (55K params, 83 features) for continuation prediction — a recurrent neural network that captures escalation sequences over 14-day windows. Onset AUC-PR: 0.246. Continuation AUC-PR: 0.739.
+- **19 ingest scripts** across 7 data domains: conflict events (ACLED), media sentiment (GDELT dynamics), satellite (FIRMS fire, VIIRS nightlights), connectivity (IODA outages), socioeconomic (LBP exchange rate, IPC food security), military/OSINT (Pikud sirens, Google Trends mobilization), and calendar context.
+- **Publication lag enforcement**: Features are shifted by their real-world availability (ACLED 3 days, GDELT 1 day) to prevent lookahead bias. This ensures the model in production sees exactly what it saw during training.
 - **Backend**: FastAPI + Supabase (PostGIS), APScheduler re-scoring every 15 minutes, two-layer alerting (strategic ML + tactical rule-based).
-- **Intelligence layer**: Gemini 2.5 Flash with Google Search grounding — the LLM searches real news, not hallucinations. Backtest mode instructs the agent to retrieve historical news for that specific date.
+- **Intelligence layer**: Gemini 2.5 Flash with Google Search grounding — the LLM searches real news, not hallucinations.
 - **Frontend**: React + Mapbox GL JS, H3 hex overlay with YlOrRd gradient heatmap, hospital shelter layer, AI-powered evacuation routing.
 
-## Challenges we ran into
+## Key discoveries
 
-The hardest problem was the Bayes error ceiling on conflict prediction. After 23 experiments, we accepted that geopolitical violence has irreducible unpredictability — the model's job is to flag elevated risk, not predict the exact moment of an attack. We shifted from maximizing precision to maximizing recall, because over-warning is survivable; missing a warning is not.
-
-Getting the LLM to not contradict the heatmap was the second challenge. Early versions of the intelligence summary would say "low probability of danger" for a RED hex, because Gemini interpreted a 54% raw probability score as low. The fix: strip raw numbers from the prompt entirely and give the LLM a human-readable tier description ("HIGH RISK — active conflict zone") with an explicit instruction to never downplay it.
-
-## Accomplishments that we're proud of
-
-The backtest demo is visceral. You start on September 30, 2023 — the map is mostly yellow. You play forward day by day. By October 8, southern Israel and northern Gaza are dark red. The model saw it coming. That's the whole point.
-
-## What we learned
-
-Data fusion is more powerful than any single model. The GDELT news sentiment and NASA FIRMS thermal signals each individually add measurable lift. A burning field and a spike in hostile news coverage in the same hex on the same day is a signal no single dataset could catch alone.
+- **Anomaly detection reframing** was the single biggest improvement. Instead of asking "will there be conflict?", we ask "how unusual is today compared to this hex's baseline?" Z-score features (deviation from 30-day rolling mean) became the #1 feature group, contributing more than population, spatial lags, or GDELT.
+- **GRU beats XGBoost for continuation by 8.7%** because it sees escalation as a *sequence* (probe → pause → larger attack → full escalation) rather than a single row of summary statistics.
+- **Most data sources are noise for onset**: Calendar features, weather, FIRMS, nightlights, food security, and Google Trends all *hurt* onset performance when added. Only z-scores, spatial lags, GDELT dynamics, population, and LBP economics help.
+- **Publication lag enforcement revealed 27% metric inflation** in our continuation model's cross-validation — a critical finding for production honesty.
 
 ## What's next for Sentinel
 
-Expand beyond the Levant — Ukraine, Sudan, Myanmar are the next priority regions. Add FCM push alerts so civilians get notified when a hex they're near flips to RED. Build the proactive monitoring agent that scans all high-risk hexes every 15 minutes and pushes alerts before a user even opens the app. The infrastructure is built. The data pipeline generalizes. Sentinel can cover any conflict zone on Earth.
+1. **Calibrate probabilities** — make model scores meaningful (a predicted 0.7 should mean 70% chance)
+2. **Register for remaining free API keys** (OpenSky ADS-B for GNSS jamming detection, Telegram for real-time OSINT, NOTAMs for airspace closures)
+3. **GEE satellite features** (TROPOMI NO2, Sentinel-2 NDVI, Dynamic World) via Google Earth Engine
+4. **Expand beyond the Levant** — Ukraine, Sudan, Myanmar are the next priority regions
+5. **Foundation model** (post-funding) — multi-theater self-supervised pretraining with cross-modal fusion of satellite imagery, text, and tabular data

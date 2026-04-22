@@ -1,13 +1,53 @@
-Sentinel XGBoost — Evaluation Report (72h label)
-=======================================================
+Sentinel v2 Evaluation Report (April 2026)
+==================================================
+Architecture: XGBoost (onset) + GRU (continuation)
+Train cutoff: 2024-06-10  |  Test start: 2024-07-01
+Label horizon: 7 days
+Publication lags enforced: ACLED 3d, GDELT 1d
 
-CV Mean ROC-AUC:       0.841 ± 0.019
-CV Mean Avg Precision: 0.412 ± 0.087
+ONSET MODEL (XGBoost, Optuna-tuned + anomaly features)
+  AUC-PR:     0.246
+  Features:   39 (z-scores, population, spatial lags, GDELT dynamics, economics)
+  Top group:  Z-scores (Δ+0.066 — anomaly detection is #1 signal)
+  Architecture benchmark:
+    XGBoost Focal:  0.243
+    XGBoost Std:    0.236
+    Random Forest:  0.179
+    LightGBM:       0.111
 
-Standard — ROC-AUC: 0.872  AUC-PR: 0.585
-Focal     — ROC-AUC: 0.873  AUC-PR: 0.594
+CONTINUATION MODEL (PerHexGRU, 2-layer, 55K params)
+  AUC-PR:     0.739 (vs XGBoost 0.680 — GRU wins by 8.7%)
+  Features:   83 (conflict rolling windows, spatial lags, GDELT, FIRMS, NTL)
+  Top group:  Conflict rolling windows (Δ+0.049)
+  Architecture benchmark:
+    GRU:            0.739 (full data)
+    XGBoost:        0.680
+    LightGBM:       0.594
 
-Best Standard:  thresh=0.75  P=0.529  R=0.543  F1=0.536
-Best Focal:     thresh=0.30  P=0.484  R=0.598  F1=0.535
+ONSET FEATURE ABLATION (ranked by impact)
+  Z-scores:         Δ+0.066  (#1)
+  Population:       Δ+0.048  (#2)
+  Spatial ring-2:   Δ+0.021  (#3)
+  Acceleration:     Δ+0.016  (#4)
+  GDELT dynamics:   Δ+0.016  (#5)
+  Residuals:        Δ+0.015  (#6)
+  Anomaly composite:Δ+0.014  (#7)
+  Actors:           Δ+0.013  (#8)
+  Economic:         Δ+0.013  (#9)
+  Spatial ring-1:   Δ+0.012  (#10)
 
-Production model: Standard XGBoost @ threshold 0.75
+REMOVED (noise per ablation):
+  Calendar:  Δ-0.009 (hurts both models)
+  Weather:   Δ-0.005
+  FIRMS raw: Δ-0.004
+  G.Trends:  Δ-0.004
+  NTL:       Δ-0.003
+
+METRICS JOURNEY
+  0.021 → 0.116 → 0.179 → 0.189 → 0.246 (onset, 11.7x total)
+  0.56  → 0.654 → 0.680 → 0.739 (continuation, 1.3x total)
+
+Model files:
+  Onset: models/xgb_onset.ubj, models/xgb_onset_focal.ubj
+  Continuation: models/per_hex_gru_best.pt (fallback: models/xgb_continuation.ubj)
+  Hyperparams: models/best_hyperparams.json

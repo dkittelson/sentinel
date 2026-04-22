@@ -38,44 +38,24 @@ export const STRATEGIC_TIER_COLORS = {
   green:  '#2ecc71',
 }
 
-// ── Continuous heatmap gradient ───────────────────────────────────────
-// Smooth thermal heatmap: clear → cool yellow → warm orange → hot red
-// Score range in practice: 0.50 – 0.73
-// Below 0.54 = no risk (transparent)
-// 0.54–0.60 = low risk (cool pale yellow → warm yellow)
-// 0.60–0.66 = moderate (yellow-orange → orange)
-// 0.66–0.73+ = high risk (orange-red → deep red)
+// ── Tier-based heatmap ─────────────────────────────────────────────────
+// Colors are driven by the scorer's percentile-based tier assignment,
+// not raw score thresholds (since the actual score distribution shifts
+// between model generations).
 export const STRATEGIC_COLOR_EXPRESSION = [
-  'case',
-  ['<', ['get', 'strategic_score'], 0.54],
-  'rgba(0,0,0,0)',  // clear — fully transparent
-  [
-    'interpolate',
-    ['linear'],
-    ['get', 'strategic_score'],
-    0.54, '#ffffb2',   // pale warm yellow
-    0.57, '#fed976',   // warm yellow
-    0.60, '#feb24c',   // golden yellow
-    0.63, '#fd8d3c',   // light orange
-    0.65, '#fc4e2a',   // orange-red
-    0.68, '#e31a1c',   // red
-    0.71, '#bd0026',   // deep red
-    0.74, '#800026',   // very dark red
-  ],
+  'match',
+  ['get', 'strategic_tier'],
+  'red',    '#800026',
+  'orange', '#fd8d3c',
+  'yellow', '#ffffb2',
+  'rgba(0,0,0,0)',  // green / default — fully transparent
 ]
 
 export const STRATEGIC_OPACITY_EXPRESSION = [
-  'case',
-  ['<', ['get', 'strategic_score'], 0.54],
-  0.0,   // fully transparent when clear
-  [
-    'interpolate',
-    ['linear'],
-    ['get', 'strategic_score'],
-    0.54, 0.45,
-    0.60, 0.58,
-    0.66, 0.72,
-    0.72, 0.85,
-    0.80, 0.92,
-  ],
+  'match',
+  ['get', 'strategic_tier'],
+  'red',    0.85,
+  'orange', 0.72,
+  'yellow', 0.55,
+  0.0,  // green / default
 ]

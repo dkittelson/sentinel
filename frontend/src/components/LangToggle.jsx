@@ -41,5 +41,7 @@ const styles = {
     fontFamily: 'system-ui, sans-serif',
     letterSpacing: '0.02em',
     transition: 'all 0.15s',
+    minWidth: 52,         // prevents width reflow between "عربي" and "EN"
+    textAlign: 'center',
   },
 }

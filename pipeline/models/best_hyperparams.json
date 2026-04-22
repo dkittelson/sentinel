@@ -1,0 +1,24 @@
+{
+  "onset": {
+    "best_cv_aucpr": 0.1441290317181665,
+    "max_depth": 7,
+    "learning_rate": 0.048935287617888984,
+    "subsample": 0.8940481434021964,
+    "colsample_bytree": 0.7542100214935006,
+    "min_child_weight": 22,
+    "gamma": 1.7475016751760057,
+    "reg_alpha": 0.03716121067396916,
+    "reg_lambda": 6.442107031384702
+  },
+  "continuation": {
+    "best_cv_aucpr": 0.5823353769502185,
+    "max_depth": 8,
+    "learning_rate": 0.08083272635573416,
+    "subsample": 0.6186838383516495,
+    "colsample_bytree": 0.7044708483545359,
+    "min_child_weight": 20,
+    "gamma": 2.0102295707500777,
+    "reg_alpha": 5.640505451262069,
+    "reg_lambda": 0.5185574558884062
+  }
+}

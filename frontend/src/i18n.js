@@ -9,12 +9,26 @@ const translations = {
     // Status bar
     sentinel: 'SENTINEL',
     connecting: 'Connecting…',
+    liveDelayed: 'Live data delayed — check backend',
     backtest: 'BACKTEST',
     danger: 'DANGER',
     warning: 'WARNING',
+    allClear: 'ALL CLEAR',
     hexes: 'hexes',
     live: 'live',
     backtestBtn: '⏪ BACKTEST',
+    high: 'High',
+    moderate: 'Moderate',
+    low: 'Low',
+
+    // Menu items
+    backtestMode: 'Backtest Mode',
+    exitBacktestMode: 'Exit Backtest',
+    showSafeLocations: 'Show Safe Locations',
+    hideSafeLocations: 'Hide Safe Locations',
+    showEvacRoute: 'Show Evac Route',
+    closeEvacRoute: 'Close Evac Route',
+    routing: 'Routing…',
 
     // Launch page
     tagline: 'Conflict Risk Intelligence · Levant',
@@ -68,6 +82,7 @@ const translations = {
     // Evacuation
     evacuate: 'EVACUATE',
     evacRoute: 'Evacuation Route',
+    evacuationRoute: 'EVACUATION ROUTE',
     findingSafe: 'Finding safest route…',
     routeDistance: 'Route distance',
     safetyScore: 'Safety score',
@@ -75,6 +90,13 @@ const translations = {
     nearestShelter: 'Nearest safe facility',
     closeRoute: 'CLOSE ROUTE',
     clickToEvac: 'Click any point on the map to find a safe evacuation route',
+    chooseRoute: 'Choose a route',
+    noSafeRoute: 'No safe route found from your location.',
+    retry: 'Retry',
+    drive: 'Drive',
+    walk: 'Walk',
+    cycle: 'Cycle',
+    riskTrend14d: '14-day risk trend',
 
     // Shelters
     showShelters: 'Shelters',
@@ -104,12 +126,26 @@ const translations = {
     // Status bar
     sentinel: 'سِنتينِل',
     connecting: 'جارٍ الاتصال…',
+    liveDelayed: 'تأخر البث المباشر — افحص الخادم',
     backtest: 'محاكاة',
     danger: 'خطر',
     warning: 'تحذير',
+    allClear: 'الوضع آمن',
     hexes: 'منطقة',
     live: 'مباشر',
     backtestBtn: '⏪ محاكاة',
+    high: 'مرتفع',
+    moderate: 'متوسط',
+    low: 'منخفض',
+
+    // Menu items
+    backtestMode: 'وضع المحاكاة',
+    exitBacktestMode: 'إنهاء المحاكاة',
+    showSafeLocations: 'إظهار المواقع الآمنة',
+    hideSafeLocations: 'إخفاء المواقع الآمنة',
+    showEvacRoute: 'إظهار مسار الإخلاء',
+    closeEvacRoute: 'إغلاق مسار الإخلاء',
+    routing: 'جارٍ التوجيه…',
 
     // Launch page
     tagline: 'استخبارات مخاطر النزاع · المشرق',
@@ -163,6 +199,7 @@ const translations = {
     // Evacuation
     evacuate: 'إخلاء',
     evacRoute: 'مسار الإخلاء',
+    evacuationRoute: 'مسار الإخلاء',
     findingSafe: 'جارٍ البحث عن أسلم طريق…',
     routeDistance: 'مسافة المسار',
     safetyScore: 'درجة الأمان',
@@ -170,6 +207,13 @@ const translations = {
     nearestShelter: 'أقرب مرفق آمن',
     closeRoute: 'إغلاق المسار',
     clickToEvac: 'اضغط على أي نقطة على الخريطة لإيجاد طريق إخلاء آمن',
+    chooseRoute: 'اختر مسارًا',
+    noSafeRoute: 'لم يتم العثور على مسار آمن من موقعك.',
+    retry: 'إعادة المحاولة',
+    drive: 'سيارة',
+    walk: 'مشي',
+    cycle: 'دراجة',
+    riskTrend14d: 'اتجاه المخاطر ١٤ يومًا',
 
     // Shelters
     showShelters: 'الملاجئ',

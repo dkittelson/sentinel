@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import mapboxgl from 'mapbox-gl'
 import 'mapbox-gl/dist/mapbox-gl.css'
+import { latLngToCell } from 'h3-js'
 
 import { useHexData } from './hooks/useHexData'
 import { useUserLocation } from './hooks/useUserLocation'
@@ -12,6 +13,9 @@ import { LaunchPage } from './components/LaunchPage'
 import { BacktestSlider } from './components/BacktestSlider'
 import { EvacRoute, useEvacRoute } from './components/EvacRoute'
 import { useShelters, sheltersToGeoJSON, addShelterLayers } from './components/ShelterLayer'
+import { LangToggle, useLang } from './components/LangToggle'
+import { isRTL, t } from './i18n'
+import { Onboarding, hasOnboarded } from './components/Onboarding'
 
 mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN
 
@@ -44,9 +48,16 @@ export default function App() {
   const [selectedHex, setSelectedHex] = useState(null)
   const [mapBounds, setMapBounds]     = useState(null)
   const [menuOpen, setMenuOpen]       = useState(false)
+  const [selectedRoute, setSelectedRoute] = useState(null)
+  const [showOnboarding, setShowOnboarding] = useState(false)
+
+  const lang = useLang()  // subscribe to language changes for re-render + RTL
+
+  const prevTierRef = useRef(null)
+  const TIER_ORDER = { green: 0, yellow: 1, orange: 2, red: 3 }
 
   const { location } = useUserLocation()
-  const { hexes: liveHexes, loading: hexLoading }     = useHexData()
+  const { hexes: liveHexes, loading: hexLoading, lastFetchedAt, timedOut } = useHexData()
   const backtest = useBacktest()
   const evac = useEvacRoute()
   const shelters = useShelters()
@@ -59,6 +70,48 @@ export default function App() {
     if (!map.current) return
     setMapBounds(getMapBounds(map.current))
   }, [])
+
+  // Request notification permission + show onboarding on first launch
+  useEffect(() => {
+    if (!launched) return
+    if ('Notification' in window && Notification.permission === 'default') {
+      Notification.requestPermission()
+    }
+    if (!hasOnboarded()) {
+      setShowOnboarding(true)
+    }
+  }, [launched])
+
+  // Reset selected route when evac route data refreshes
+  useEffect(() => {
+    setSelectedRoute(null)
+  }, [evac.routeData])
+
+  // Escalation detection: fire browser notification + haptic when user's hex tier rises
+  useEffect(() => {
+    if (!hexes.length) return
+    const [lng, lat] = USER_DEFAULT.current
+    const userH3 = latLngToCell(lat, lng, 6)
+    const userHex = hexes.find(h => h.h3_id === userH3)
+    if (!userHex) return
+
+    const tier = userHex.strategic_tier || 'green'
+    const prev = prevTierRef.current
+
+    if (prev !== null && (TIER_ORDER[tier] ?? 0) > (TIER_ORDER[prev] ?? 0)) {
+      if ('Notification' in window && Notification.permission === 'granted') {
+        new Notification('⚠ Sentinel Alert', {
+          body: `Risk in your area escalated to ${tier.toUpperCase()}`,
+          icon: '/favicon.ico',
+        })
+      }
+      if ('vibrate' in navigator) {
+        navigator.vibrate([200, 100, 200])
+      }
+    }
+
+    prevTierRef.current = tier
+  }, [hexes])
 
   // Init map immediately when user clicks ENTER (no waiting for GPS)
   useEffect(() => {
@@ -176,38 +229,41 @@ export default function App() {
     source.setData(hexesToGeoJSON(hexes))
   }, [mapReady, hexes, isLoading])
 
-  // Draw evac route line when route data changes
+  // Draw evac route line — uses selected alternate route's points if chosen, else best route
   useEffect(() => {
     if (!mapReady) return
     const source = map.current.getSource(EVAC_SOURCE)
     if (!source) return
 
-    if (evac.routeData?.route_points?.length > 1) {
+    const points = selectedRoute?.route_points ?? evac.routeData?.route_points
+    const modeColor = { driving: '#2ecc71', walking: '#3498db', cycling: '#9b59b6' }
+    const lineColor = modeColor[selectedRoute?.mode] ?? '#2ecc71'
+
+    if (points?.length > 1) {
       source.setData({
         type: 'FeatureCollection',
         features: [{
           type: 'Feature',
           properties: {},
-          geometry: {
-            type: 'LineString',
-            coordinates: evac.routeData.route_points,
-          },
+          geometry: { type: 'LineString', coordinates: points },
         }],
       })
+      map.current.setPaintProperty(EVAC_LAYER, 'line-color', lineColor)
       map.current.setLayoutProperty(EVAC_LAYER, 'visibility', 'visible')
     } else {
       source.setData({ type: 'FeatureCollection', features: [] })
       map.current.setLayoutProperty(EVAC_LAYER, 'visibility', 'none')
     }
-  }, [mapReady, evac.routeData])
+  }, [mapReady, evac.routeData, selectedRoute])
 
   // Toggle shelter layer visibility
   useEffect(() => {
     if (!mapReady || !shelterLayerIds.current) return
     const vis = shelters.visible ? 'visible' : 'none'
-    const { CIRCLE_LAYER, LABEL_LAYER, SOURCE_ID: sSourceId } = shelterLayerIds.current
+    const { CIRCLE_LAYER, LABEL_LAYER, EMOJI_LAYER, SOURCE_ID: sSourceId } = shelterLayerIds.current
     map.current.setLayoutProperty(CIRCLE_LAYER, 'visibility', vis)
     map.current.setLayoutProperty(LABEL_LAYER, 'visibility', vis)
+    if (EMOJI_LAYER) map.current.setLayoutProperty(EMOJI_LAYER, 'visibility', vis)
 
     // Update data if becoming visible and shelters are loaded
     if (shelters.visible && shelters.shelters.length > 0) {
@@ -226,45 +282,58 @@ export default function App() {
     <>
       {!launched && <LaunchPage onEnter={() => setLaunched(true)} />}
 
-      <div style={{ width: '100vw', height: '100vh', position: 'relative', background: '#0a0a14' }}>
+      <div style={{ width: '100vw', height: '100vh', position: 'relative', background: '#0a0a14' }} dir={isRTL() ? 'rtl' : 'ltr'}>
         <div ref={mapContainer} style={{ width: '100%', height: '100%' }} />
 
         {launched && (
           <>
-            {/* Status bar */}
-            <div style={styles.statusBar}>
-              <svg width="22" height="22" viewBox="0 0 52 52" fill="none" style={{ flexShrink: 0 }}>
+            {/* Status bar — always LTR; lang toggle pinned to far right */}
+            <div style={{ ...styles.statusBar, direction: 'ltr' }}>
+              <svg width="22" height="22" viewBox="0 0 52 52" fill="none" style={{ flexShrink: 0 }} aria-hidden="true">
                 <polygon points="26,2 50,14 50,38 26,50 2,38 2,14" stroke="#ffffff" strokeWidth="2" fill="none" />
                 <polygon points="26,10 42,18 42,34 26,42 10,34 10,18" stroke="#ffffff" strokeWidth="1.2" fill="rgba(255,255,255,0.06)" />
                 <circle cx="26" cy="26" r="4" fill="#ffffff" />
               </svg>
-              {isLoading ? (
-                <span style={styles.muted}>Connecting…</span>
+
+              {isLoading && hexes.length === 0 && !timedOut ? (
+                <span style={styles.muted}>{t('connecting')}</span>
+              ) : timedOut && hexes.length === 0 ? (
+                <span style={{ ...styles.muted, color: '#f09438' }}>{t('liveDelayed')}</span>
               ) : (
                 <>
                   {backtest.active && (
-                    <span style={{ ...styles.badge, background: '#8e44ad' }}>
-                      BACKTEST
-                    </span>
+                    <span style={{ ...styles.badge, background: '#8e44ad' }}>{t('backtest')}</span>
                   )}
                   {dangerCount > 0 && (
-                    <span style={{ ...styles.badge, background: '#e74c3c' }}>
-                      {dangerCount} DANGER
-                    </span>
+                    <span style={{ ...styles.badge, background: '#e74c3c' }}>{dangerCount} {t('danger')}</span>
                   )}
                   {warningCount > 0 && (
-                    <span style={{ ...styles.badge, background: '#f09438' }}>
-                      {warningCount} WARNING
-                    </span>
+                    <span style={{ ...styles.badge, background: '#f09438' }}>{warningCount} {t('warning')}</span>
                   )}
-                  <span style={styles.liveDot}>●</span>
-                  <span style={styles.liveText}>{backtest.active ? backtest.currentDate : 'live'}</span>
-                  <span style={styles.legendSep}>│</span>
-                  <span style={styles.legendItem}><span style={{ ...styles.legendSwatch, background: '#800026' }} />High</span>
-                  <span style={styles.legendItem}><span style={{ ...styles.legendSwatch, background: '#fd8d3c' }} />Moderate</span>
-                  <span style={styles.legendItem}><span style={{ ...styles.legendSwatch, background: '#ffffb2' }} />Low</span>
+                  {!backtest.active && dangerCount === 0 && warningCount === 0 && hexes.length > 0 && (
+                    <span style={{ ...styles.badge, background: '#1a7a3a' }}>{t('allClear')}</span>
+                  )}
+                  <span style={styles.liveDot} aria-hidden="true">●</span>
+                  <span style={styles.liveText}>
+                    {backtest.active
+                      ? backtest.currentDate
+                      : lastFetchedAt
+                        ? lastFetchedAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                        : t('live')}
+                  </span>
+                  <span style={styles.legendSep} aria-hidden="true">│</span>
+                  <span style={styles.legendItem}>
+                    <span style={{ ...styles.legendSwatch, background: '#800026' }} aria-hidden="true" />{t('high')}
+                  </span>
+                  <span style={styles.legendItem}>
+                    <span style={{ ...styles.legendSwatch, background: '#fd8d3c' }} aria-hidden="true" />{t('moderate')}
+                  </span>
+                  <span style={styles.legendItem}>
+                    <span style={{ ...styles.legendSwatch, background: '#ffffb2' }} aria-hidden="true" />{t('low')}
+                  </span>
                 </>
               )}
+              <span style={{ marginLeft: 'auto' }}><LangToggle /></span>
             </div>
 
             {/* Menu button */}
@@ -285,8 +354,12 @@ export default function App() {
                       color: backtest.active ? '#8e44ad' : '#ccc',
                     }}
                   >
-                    <svg style={styles.menuSvg} viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-4.45"/></svg>
-                    {backtest.active ? 'Exit Backtest' : 'Backtest Mode'}
+                    <svg style={styles.menuSvg} viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                      <circle cx="10" cy="10" r="7"/>
+                      <polyline points="10 6 10 10 13 12"/>
+                      <polyline points="3 6 6 6 6 3"/>
+                    </svg>
+                    {backtest.active ? t('exitBacktestMode') : t('backtestMode')}
                   </button>
                   <button
                     onClick={() => {
@@ -298,8 +371,8 @@ export default function App() {
                       color: shelters.visible ? '#2ecc71' : '#ccc',
                     }}
                   >
-                    <svg style={styles.menuSvg} viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="14" height="14" rx="2"/><line x1="10" y1="6" x2="10" y2="14"/><line x1="6" y1="10" x2="14" y2="10"/></svg>
-                    {shelters.visible ? 'Hide Hospitals' : 'Show Hospitals'}
+                    <svg style={styles.menuSvg} viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M10 2L2 7v11h16V7L10 2z"/><rect x="7" y="11" width="6" height="7"/></svg>
+                    {shelters.visible ? t('hideSafeLocations') : t('showSafeLocations')}
                   </button>
                   <button
                     onClick={() => {
@@ -319,19 +392,27 @@ export default function App() {
                     }}
                   >
                     <svg style={styles.menuSvg} viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M3 10h4l2-6 3 12 2-6h3"/></svg>
-                    {evac.loading ? 'Routing...' : evac.active ? 'Close Evac Route' : 'Show Evac Route'}
+                    {evac.loading ? t('routing') : evac.active ? t('closeEvacRoute') : t('showEvacRoute')}
                   </button>
                 </div>
               )}
               <button
                 onClick={() => setMenuOpen(m => !m)}
+                aria-label={menuOpen ? 'Close menu' : 'Open menu'}
+                aria-expanded={menuOpen}
                 style={{
                   ...styles.menuBtn,
                   borderColor: menuOpen ? '#e74c3c' : '#555',
                   background: menuOpen ? 'rgba(231,76,60,0.15)' : 'rgba(10,10,20,0.85)',
                 }}
               >
-                <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: '100%', height: '100%' }}>{menuOpen ? '✕' : '☰'}</span>
+                <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: '100%', height: '100%' }} aria-hidden="true">
+                  {menuOpen ? (
+                    <svg width="16" height="16" viewBox="0 0 20 20" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" fill="none"><line x1="5" y1="5" x2="15" y2="15"/><line x1="15" y1="5" x2="5" y2="15"/></svg>
+                  ) : (
+                    <svg width="16" height="16" viewBox="0 0 20 20" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" fill="none"><line x1="4" y1="6" x2="16" y2="6"/><line x1="4" y1="10" x2="16" y2="10"/><line x1="4" y1="14" x2="16" y2="14"/></svg>
+                  )}
+                </span>
               </button>
             </div>
 
@@ -347,8 +428,16 @@ export default function App() {
               active={evac.active}
               routeData={evac.routeData}
               loading={evac.loading}
+              error={evac.error}
               onClose={evac.deactivate}
+              onRouteSelect={setSelectedRoute}
+              onRetry={evac.retry}
             />
+
+            {/* First-launch onboarding */}
+            {showOnboarding && (
+              <Onboarding onDone={() => setShowOnboarding(false)} />
+            )}
 
             {/* Backtest slider */}
             {backtest.active && (

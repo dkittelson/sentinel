@@ -1,4 +1,6 @@
 import { useMemo, useState } from 'react'
+import { t } from '../i18n'
+import { useLang } from './LangToggle'
 
 /**
  * BacktestSlider — bottom-center time-travel control bar for demo mode.
@@ -39,6 +41,7 @@ export function BacktestSlider({
   onSetSpeed,
   onExit,
 }) {
+  useLang()
   if (!dateRange || !currentDate) return null
 
   const minDate = new Date(dateRange.min_date)
@@ -100,20 +103,20 @@ export function BacktestSlider({
         <div style={styles.counts}>
           {counts.red > 0 && (
             <span style={{ ...styles.badge, background: '#e74c3c' }}>
-              {counts.red} RED
+              {counts.red} {t('red')}
             </span>
           )}
           {counts.orange > 0 && (
             <span style={{ ...styles.badge, background: '#f09438' }}>
-              {counts.orange} ORANGE
+              {counts.orange} {t('orange')}
             </span>
           )}
           {counts.yellow > 0 && (
             <span style={{ ...styles.badge, background: '#f6d860', color: '#111' }}>
-              {counts.yellow} YELLOW
+              {counts.yellow} {t('yellow')}
             </span>
           )}
-          <span style={styles.muted}>{hexes.length} hexes</span>
+          <span style={styles.muted}>{hexes.length} {t('hexes')}</span>
         </div>
         {loading && <span style={styles.spinner}>⟳</span>}
       </div>
@@ -206,7 +209,7 @@ export function BacktestSlider({
         </div>
 
         <button onClick={onExit} style={styles.exitBtn}>
-          EXIT BACKTEST
+          {t('exitBacktest')}
         </button>
       </div>
     </div>

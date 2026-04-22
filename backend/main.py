@@ -20,7 +20,7 @@ import asyncio
 from contextlib import asynccontextmanager
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Header
 from fastapi.middleware.cors import CORSMiddleware
 from apscheduler.schedulers.background import BackgroundScheduler
 from supabase import create_client, Client
@@ -63,11 +63,17 @@ async def lifespan(app: FastAPI):
 # ── App ───────────────────────────────────────────────────────────────────────
 app = FastAPI(title="Sentinel", version="1.0.0", lifespan=lifespan)
 
+ALLOWED_ORIGINS = [
+    o.strip()
+    for o in os.getenv("ALLOWED_ORIGINS", "http://localhost:5173,http://localhost:5174").split(",")
+    if o.strip()
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],   # tighten for production
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=ALLOWED_ORIGINS,
+    allow_methods=["GET", "POST"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 
 
@@ -109,18 +115,8 @@ def get_all_hexes():
                 break
             offset += page_size
         if all_rows:
-            # Recompute tiers on-the-fly so threshold changes take effect
-            # without re-running the full scoring pipeline
-            for row in all_rows:
-                s = row.get("strategic_score", 0)
-                if s >= 0.70:
-                    row["strategic_tier"] = "red"
-                elif s >= 0.63:
-                    row["strategic_tier"] = "orange"
-                elif s >= 0.54:
-                    row["strategic_tier"] = "yellow"
-                else:
-                    row["strategic_tier"] = "green"
+            # Tiers are already set by the scorer using percentile thresholds
+            # calibrated to the latest run's distribution. Don't re-tierify here.
             return all_rows
     except Exception as e:
         print(f"[hexes] Supabase query failed, falling back to CSV: {e}")
@@ -134,6 +130,16 @@ def get_all_hexes():
         return score_date(latest)
     except Exception as e:
         print(f"[hexes] Backtest fallback also failed: {e}")
+
+    # Final fallback: static demo dataset bundled with the repo
+    import json as _json
+    demo_path = os.path.join(os.path.dirname(__file__), "demo_hexes.json")
+    try:
+        with open(demo_path) as f:
+            print("[hexes] Serving static demo dataset")
+            return _json.load(f)
+    except Exception as e2:
+        print(f"[hexes] Demo fallback also failed: {e2}")
         return []
 
 
@@ -190,6 +196,148 @@ def get_hex(h3_id: str):
     )
     result["recent_events"] = acled.data
 
+    return result
+
+
+@app.get("/hex/{h3_id}/drivers")
+def get_hex_drivers(h3_id: str):
+    """
+    Return the top driver chips for a hex — 'why is this hex orange?'
+    Parses tactical_triggers + annotates with feature context from GDELT/FIRMS.
+    Used by HexSidebar to show 'What's driving this score?' chips.
+    """
+    risk = (
+        supabase.table("risk_scores")
+        .select("strategic_score, strategic_tier, tactical_tier, tactical_triggers, should_alert")
+        .eq("h3_id", h3_id)
+        .maybe_single()
+        .execute()
+    )
+    if not risk.data:
+        return {"drivers": [], "score": None, "tier": "green"}
+
+    row = risk.data
+    score = row.get("strategic_score", 0) or 0
+    tier  = row.get("strategic_tier", "green")
+    raw   = row.get("tactical_triggers", "") or ""
+
+    # Parse pipe-separated tactical triggers into structured chips
+    raw_triggers = [t.strip() for t in raw.split("|") if t.strip()]
+
+    # Map trigger text → chip metadata (label, severity color)
+    TRIGGER_MAP = {
+        "hostility":     ("Media hostility surge",   "#e74c3c"),
+        "firms":         ("Thermal anomaly (fire)",  "#f39c12"),
+        "fire":          ("Thermal anomaly (fire)",  "#f39c12"),
+        "siren":         ("Air raid sirens detected","#e74c3c"),
+        "neighbor":      ("Spillover from adjacent", "#f09438"),
+        "gdelt":         ("Media signal spike",      "#f09438"),
+        "fatality":      ("Fatality surge",          "#c0392b"),
+        "explosion":     ("Explosions reported",     "#e74c3c"),
+        "battle":        ("Active battle events",    "#c0392b"),
+        "actor":         ("New armed actor",         "#8e44ad"),
+        "strategic":     ("High ML risk score",      "#e74c3c"),
+        "danger":        ("Sustained danger level",  "#e74c3c"),
+        "economic":      ("Economic stress signal",  "#f09438"),
+        "lbp":           ("Currency volatility",     "#f09438"),
+    }
+
+    drivers = []
+    seen_labels = set()
+    for trigger in raw_triggers:
+        tl = trigger.lower()
+        for keyword, (label, color) in TRIGGER_MAP.items():
+            if keyword in tl and label not in seen_labels:
+                drivers.append({"label": label, "color": color, "raw": trigger})
+                seen_labels.add(label)
+                break
+        else:
+            if trigger and trigger not in seen_labels:
+                drivers.append({"label": trigger, "color": "#888", "raw": trigger})
+                seen_labels.add(trigger)
+
+    # Score-based driver if no triggers found but score is elevated
+    if not drivers and score >= 0.54:
+        tier_colors = {"red": "#e74c3c", "orange": "#f09438", "yellow": "#f1c40f"}
+        drivers.append({
+            "label": f"ML score {score:.2f} — {tier} alert",
+            "color": tier_colors.get(tier, "#888"),
+            "raw": "strategic_score",
+        })
+
+    return {
+        "drivers": drivers[:5],  # cap at 5 chips
+        "score": round(score, 4),
+        "tier": tier,
+    }
+
+
+@app.get("/hex/{h3_id}/history")
+def get_hex_history(
+    h3_id: str,
+    days: int = Query(14, description="How many days of history to return", ge=1, le=90),
+):
+    """
+    Return daily strategic_score history for a hex.
+    Powers the 14-day sparkline + trend projection in HexSidebar.
+
+    Query order:
+    1. risk_scores_history table (real scored data, accumulates after migration)
+    2. Backtest engine fallback for any days not yet in the history table
+       (uses the same CSV + v1 XGBoost model that powers /hexes/backtest)
+    """
+    import datetime
+
+    cutoff = (datetime.datetime.utcnow() - datetime.timedelta(days=days)).isoformat()
+
+    # 1. Pull from history table
+    resp = (
+        supabase.table("risk_scores_history")
+        .select("strategic_score, strategic_tier, scored_at")
+        .eq("h3_id", h3_id)
+        .gte("scored_at", cutoff)
+        .order("scored_at", desc=False)
+        .execute()
+    )
+
+    # Collapse multiple intra-day runs to one point per calendar day (last run wins)
+    from collections import OrderedDict
+    by_day: dict = OrderedDict()
+    for row in (resp.data or []):
+        day = row["scored_at"][:10]   # "YYYY-MM-DD"
+        by_day[day] = {
+            "date":            day,
+            "strategic_score": round(row["strategic_score"], 4),
+            "strategic_tier":  row["strategic_tier"],
+        }
+
+    # 2. Backtest fallback for missing days (history table starts empty after migration)
+    present_days = set(by_day.keys())
+    today = datetime.date.today()
+    needed_days = [
+        str(today - datetime.timedelta(days=i))
+        for i in range(days - 1, -1, -1)
+    ]
+    missing = [d for d in needed_days if d not in present_days]
+
+    if missing:
+        try:
+            sys.path.insert(0, os.path.dirname(__file__))
+            from backtest_score import score_date
+            for day_str in missing:
+                records = score_date(day_str)
+                match = next((r for r in records if r["h3_id"] == h3_id), None)
+                if match:
+                    by_day[day_str] = {
+                        "date":            day_str,
+                        "strategic_score": round(match["strategic_score"], 4),
+                        "strategic_tier":  match["strategic_tier"],
+                    }
+        except Exception as e:
+            print(f"[history] Backtest fallback failed for {h3_id}: {e}")
+
+    # Return sorted ascending
+    result = sorted(by_day.values(), key=lambda x: x["date"])
     return result
 
 
@@ -544,8 +692,11 @@ def get_shelters():
 
 
 @app.post("/ingest/run")
-def trigger_ingest():
+def trigger_ingest(x_api_key: str = Header(None)):
     """Manually trigger a scoring run (useful for demos / testing)."""
+    api_key = os.getenv("SENTINEL_API_KEY")
+    if api_key and x_api_key != api_key:
+        raise HTTPException(status_code=401, detail="Invalid API key")
     try:
         sys.path.insert(0, os.path.dirname(__file__))
         from importlib import import_module, invalidate_caches

@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
+import localShelters from '../data/shelters.json'
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
 
@@ -27,9 +28,11 @@ export function useShelters() {
       if (!res.ok) throw new Error(`API ${res.status}`)
       const data = await res.json()
       setShelters(data.shelters || [])
+    } catch {
+      // Backend unavailable — use bundled static data
+      setShelters(localShelters.shelters || [])
+    } finally {
       setLoaded(true)
-    } catch (err) {
-      console.error('Failed to load shelters:', err)
     }
   }, [loaded])
 
@@ -67,15 +70,15 @@ export function sheltersToGeoJSON(shelters) {
 
 /**
  * Add shelter layers to a Mapbox map instance.
- * Uses hospital cross icon rendered via SDF for crisp display.
+ * Uses type-aware colored circles + emoji labels — no canvas sprites needed.
  * Call once after map loads; control visibility via setLayoutProperty.
  */
 export function addShelterLayers(map) {
-  const SOURCE_ID = 'shelter-source'
-  const ICON_LAYER = 'shelter-icons'
-  const LABEL_LAYER = 'shelter-labels'
+  const SOURCE_ID   = 'shelter-source'
+  const CIRCLE_LAYER = 'shelter-circles'
+  const EMOJI_LAYER  = 'shelter-emoji'
+  const LABEL_LAYER  = 'shelter-labels'
 
-  // Source
   if (!map.getSource(SOURCE_ID)) {
     map.addSource(SOURCE_ID, {
       type: 'geojson',
@@ -83,55 +86,47 @@ export function addShelterLayers(map) {
     })
   }
 
-  // Load custom hospital cross icon (rendered as canvas → image)
-  if (!map.hasImage('hospital-cross')) {
-    const size = 40
-    const canvas = document.createElement('canvas')
-    canvas.width = size
-    canvas.height = size
-    const ctx = canvas.getContext('2d')
-
-    // White circle background
-    ctx.beginPath()
-    ctx.arc(size / 2, size / 2, size / 2 - 1, 0, Math.PI * 2)
-    ctx.fillStyle = '#ffffff'
-    ctx.fill()
-    ctx.strokeStyle = '#cc3333'
-    ctx.lineWidth = 2
-    ctx.stroke()
-
-    // Red cross
-    const cx = size / 2, cy = size / 2
-    const arm = 6, half = 3
-    ctx.fillStyle = '#cc3333'
-    ctx.fillRect(cx - half, cy - arm, half * 2, arm * 2) // vertical
-    ctx.fillRect(cx - arm, cy - half, arm * 2, half * 2) // horizontal
-
-    map.addImage('hospital-cross', { width: size, height: size, data: ctx.getImageData(0, 0, size, size).data })
-  }
-
-  // Icon layer (hospital cross markers)
-  if (!map.getLayer(ICON_LAYER)) {
+  // Colored circle per shelter type (driven by the 'color' property from sheltersToGeoJSON)
+  if (!map.getLayer(CIRCLE_LAYER)) {
     map.addLayer({
-      id: ICON_LAYER,
-      type: 'symbol',
+      id: CIRCLE_LAYER,
+      type: 'circle',
       source: SOURCE_ID,
-      layout: {
-        'icon-image': 'hospital-cross',
-        'icon-size': [
+      paint: {
+        'circle-color': ['get', 'color'],
+        'circle-radius': [
           'interpolate', ['linear'], ['zoom'],
-          5, 0.4,
-          8, 0.6,
-          12, 0.8,
+          5, 4,
+          9, 7,
+          12, 10,
         ],
-        'icon-allow-overlap': true,
-        'icon-ignore-placement': false,
-        visibility: 'none',
+        'circle-stroke-color': '#ffffff',
+        'circle-stroke-width': 1.5,
+        'circle-opacity': 0.9,
       },
+      layout: { visibility: 'none' },
     })
   }
 
-  // Label layer
+  // Emoji label centered on the circle (visible at zoom ≥ 7)
+  if (!map.getLayer(EMOJI_LAYER)) {
+    map.addLayer({
+      id: EMOJI_LAYER,
+      type: 'symbol',
+      source: SOURCE_ID,
+      layout: {
+        'text-field': ['get', 'emoji'],
+        'text-size': 13,
+        'text-allow-overlap': true,
+        'text-ignore-placement': true,
+        visibility: 'none',
+      },
+      paint: { 'text-color': '#ffffff' },
+      minzoom: 7,
+    })
+  }
+
+  // Name label below the circle (visible only when zoomed in)
   if (!map.getLayer(LABEL_LAYER)) {
     map.addLayer({
       id: LABEL_LAYER,
@@ -140,7 +135,7 @@ export function addShelterLayers(map) {
       layout: {
         'text-field': ['get', 'name'],
         'text-size': 11,
-        'text-offset': [0, 1.5],
+        'text-offset': [0, 1.6],
         'text-anchor': 'top',
         'text-optional': true,
         visibility: 'none',
@@ -150,11 +145,11 @@ export function addShelterLayers(map) {
         'text-halo-color': '#000',
         'text-halo-width': 1,
       },
-      minzoom: 8,
+      minzoom: 9,
     })
   }
 
-  return { SOURCE_ID, CIRCLE_LAYER: ICON_LAYER, LABEL_LAYER }
+  return { SOURCE_ID, CIRCLE_LAYER, LABEL_LAYER, EMOJI_LAYER }
 }
 
 /**

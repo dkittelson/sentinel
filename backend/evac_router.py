@@ -66,11 +66,11 @@ def _haversine(lat1, lng1, lat2, lng2):
     return R * 2 * math.asin(math.sqrt(a))
 
 
-def _get_mapbox_route(from_lng, from_lat, to_lng, to_lat, waypoints=None):
+def _get_mapbox_route(from_lng, from_lat, to_lng, to_lat, waypoints=None,
+                      profile: str = "driving"):
     """
-    Call Mapbox Directions API to get a driving route.
-    Optionally pass waypoints as list of [lng, lat] to route via intermediate points
-    (useful for routing around danger zones).
+    Call Mapbox Directions API for a route.
+    profile: 'driving' | 'walking' | 'cycling'
     Returns (route_coords, distance_km, duration_min) or (None, None, None).
     """
     coords_str = f"{from_lng},{from_lat}"
@@ -80,7 +80,7 @@ def _get_mapbox_route(from_lng, from_lat, to_lng, to_lat, waypoints=None):
     coords_str += f";{to_lng},{to_lat}"
 
     url = (
-        f"https://api.mapbox.com/directions/v5/mapbox/driving/"
+        f"https://api.mapbox.com/directions/v5/mapbox/{profile}/"
         f"{coords_str}"
         f"?geometries=geojson&overview=full&access_token={MAPBOX_TOKEN}"
     )
@@ -211,9 +211,10 @@ def find_evac_route(
             "to": [from_lng, from_lat],
         }
 
-    # ---- Try top 5 candidates, pick the route with fewest danger crossings ----
+    # ---- Try top 5 candidates, collect best + runner-up for multi-route cards ----
     best_route = None
     best_danger_count = float("inf")
+    scored_routes = []  # (danger_count, route_dict) for all viable routes
 
     for dest in candidates[:5]:
         coords, dist_km, dur_min = _get_mapbox_route(from_lng, from_lat, dest["lng"], dest["lat"])
@@ -224,18 +225,22 @@ def find_evac_route(
             coords, hex_lookup, danger_hexes
         )
 
+        route_dict = {
+            "route_points": coords,
+            "distance_km": dist_km,
+            "duration_min": int(dur_min),
+            "destination": dest["name"],
+            "destination_country": dest.get("country", ""),
+            "danger_hexes_on_route": danger_ids,
+            "mode": "driving",
+            "from": [from_lng, from_lat],
+            "to": [dest["lng"], dest["lat"]],
+        }
+        scored_routes.append((danger_count, route_dict))
+
         if danger_count < best_danger_count:
             best_danger_count = danger_count
-            best_route = {
-                "route_points": coords,
-                "distance_km": dist_km,
-                "duration_min": int(dur_min),
-                "destination": dest["name"],
-                "destination_country": dest.get("country", ""),
-                "danger_hexes_on_route": danger_ids,
-                "from": [from_lng, from_lat],
-                "to": [dest["lng"], dest["lat"]],
-            }
+            best_route = route_dict
 
         # Perfect route: zero danger crossings — no need to try more
         if danger_count == 0:
@@ -318,6 +323,49 @@ def find_evac_route(
 
     best_route["nearest_shelter"] = nearest_shelter
     best_route["narrative"] = ""  # Filled by Gemini in the endpoint
+
+    # ---- Build top-3 route alternatives ----
+    # Slot 0: best driving route (already found)
+    # Slot 1: second-best driving destination
+    # Slot 2: walking profile to the same best destination (short-range fallback)
+    alternatives = []
+    scored_routes.sort(key=lambda x: x[0])  # sort by danger count
+    seen_dests = set()
+    for _, r in scored_routes:
+        if r["destination"] not in seen_dests and r["destination"] != best_route["destination"]:
+            seen_dests.add(r["destination"])
+            r["nearest_shelter"] = None
+            r["narrative"] = ""
+            alternatives.append(r)
+        if len(alternatives) >= 1:
+            break
+
+    # Walking alternative to same best destination
+    best_dest_lat = best_route["to"][1]
+    best_dest_lng = best_route["to"][0]
+    walk_coords, walk_dist, walk_dur = _get_mapbox_route(
+        from_lng, from_lat, best_dest_lng, best_dest_lat, profile="walking"
+    )
+    if walk_coords and walk_dist is not None and walk_dist < 30:
+        walk_danger, _, walk_ids = _score_route_safety(walk_coords, hex_lookup, danger_hexes)
+        alternatives.append({
+            "route_points": walk_coords,
+            "distance_km": walk_dist,
+            "duration_min": int(walk_dur),
+            "destination": best_route["destination"],
+            "destination_country": best_route["destination_country"],
+            "danger_hexes_on_route": walk_ids,
+            "mode": "walking",
+            "nearest_shelter": nearest_shelter,
+            "narrative": "",
+            "from": [from_lng, from_lat],
+            "to": [best_dest_lng, best_dest_lat],
+        })
+
+    # Shallow-copy best_route into the routes list to avoid a circular ref
+    # (best_route["routes"][0] == best_route would recurse FastAPI's encoder).
+    best_route_copy = {k: v for k, v in best_route.items() if k != "routes"}
+    best_route["routes"] = [best_route_copy] + alternatives[:2]
     return best_route
 
 
