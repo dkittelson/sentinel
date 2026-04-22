@@ -91,24 +91,37 @@ Publication lags enforced: ACLED +3 days, GDELT +1 day. Without enforcement, con
 
 ### With funding (~$30K)
 
+All features above can be built and demoed free. Funding covers scale and the one visual upgrade that changes how the product looks:
+
 | Use | Cost | What it unlocks |
 |---|---|---|
-| 3 paid B2B pilots | ~$12K (sales + legal templates) | Revenue validation → Series seed story |
-| Sentinel Hub Pro satellite data | ~$500/mo | Real-time satellite damage + NDVI layers in the map |
-| GPU compute budget | ~$5K | Larger embedding models, faster GRU iteration |
-| Levant domain analyst (part-time) | ~$5K | Ground-truth validation → credibility for insurance/NGO buyers |
+| **6 months product infra** | ~$2,500 | Always-on backend, Supabase Pro, Mapbox paid tier — no more free-tier sleep restarts |
+| **Sentinel Hub Pro** | ~$1,200 (6 mo) | Satellite imagery map tiles: users see actual terrain + burn scars at 10m resolution, not just colored hexes |
+| **Outreach to 10 security consulting firms** | ~$3K (travel + legal templates) | First paying customer → validation before larger enterprise buyers |
+| **GPU compute** | ~$3K | Larger text embedding models, faster GRU iteration |
+| **Levant domain analyst (part-time)** | ~$5K | Ground-truth validation → credibility with journalists and consulting buyers |
 
 ---
 
 ## Business Model
 
-Three revenue wedges targeting organizations that price geopolitical risk:
+Three stages, ordered by sales cycle and reachability:
 
-| Wedge | Buyers | Angle | TAM |
-|---|---|---|---|
-| Supply chain | Logistics, shipping, commodities | 70× finer resolution than competitors; 72h forward (reactive tools only react) | $3–5B SCRM market |
-| Insurance / parametric | Lloyd's syndicates, Munich Re, AIG | Automated payout triggers; removes claims investigation | $1–4B political risk + marine war |
-| Alternative data / finance | Hedge funds, Bloomberg/Refinitiv distributors | Conflict scores as trading signals; 9.05% risk-adjusted return differential (academic) | $1–2B alt-data |
+### Stage 1 — Civilians & Journalists (now, free product)
+Build credibility through real use. Journalists at Reuters, AP, and BBC are already in the Levant — a tool that scores their exact hex drives press coverage, which drives everything downstream. No sales cycle. No contract. Just a product good enough that people talk about it.
+
+### Stage 2 — Small Security Consulting Firms (first revenue)
+Boutique risk consultancies — Sibylline, Corisk, Stirling Assynt, and dozens like them — write bespoke threat reports for corporate clients at $200–500/hr. They need structured, citable data sources. Sentinel gives them hex-level risk scores they can embed directly into client reports.
+
+| Offering | Price | Why it works |
+|---|---|---|
+| Per-seat API access | $200–500/seat/month | Analyst tool — replaces manual OSINT aggregation |
+| White-label report data | $2–5K/month | Firm cites "Sentinel data" in deliverables to clients |
+
+These firms move fast (no procurement, no security review), validate the product in professional context, and create a reference customer list before approaching larger buyers.
+
+### Stage 3 — Enterprise (after validation)
+Supply chain, insurance/parametric, and alt-data finance are the long-term wedges — but they require 6–18 month sales cycles and existing revenue to credibly enter. The path is: press coverage → consulting firm validation → inbound enterprise interest.
 
 Comps: Recorded Future ($2.65B exit), Dataminr ($4.1B), Seerist (Verisk acquisition).
 
